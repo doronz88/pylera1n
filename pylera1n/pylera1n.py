@@ -107,6 +107,8 @@ class Pylera1n:
         if not self._shsh_blob.exists():
             self.boot_ramdisk()
             self.dump_blobs()
+            if not self._rootless:
+                self.disable_nvram_stuff()
 
     def boot_ramdisk(self) -> None:
         if self._product_version is None:
@@ -139,6 +141,21 @@ class Pylera1n:
 
         self._img4tool('--convert', '-s', self._shsh_blob, dump_file)
         dump_file.unlink()
+
+    @staticmethod
+    def disable_nvram_stuff() -> None:
+        sock = usbmux.select_device().connect(SSH_PORT)
+        with SSHClient(sock) as ssh:
+            ssh.exec('/usr/sbin/nvram boot-args="-v keepsyms=1 debug=0x2014e launchd_unsecure_cache=1 '
+                     'launchd_missing_exec_no_panic=1 amfi=0xff amfi_allow_any_signature=1 '
+                     'amfi_get_out_of_my_way=1 amfi_allow_research=1 '
+                     'amfi_unrestrict_task_for_pid=1 amfi_unrestricted_local_signing=1 '
+                     'cs_enforcement_disable=1 pmap_cs_allow_modified_code_pages=1 pmap_cs_enforce_coretrust=0 '
+                     'pmap_cs_unrestrict_pmap_cs_disable=1 -unsafe_kernel_text dtrace_dof_mode=1 '
+                     'panic-wait-forever=1 -panic_notify cs_debug=1 PE_i_can_has_debugger=1"')
+            ssh.exec('/usr/sbin/nvram allow-root-hash-mismatch=1')
+            ssh.exec('/usr/sbin/nvram root-live-fs=1')
+            ssh.exec('/usr/sbin/nvram auto-boot=false')
 
     @contextlib.contextmanager
     def create_ramdisk(self) -> None:
