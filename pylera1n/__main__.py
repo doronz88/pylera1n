@@ -7,7 +7,7 @@ from paramiko.config import SSH_PORT
 from pymobiledevice3 import usbmux
 
 import pylera1n
-from pylera1n.palera1n.sshclient import SSHClient
+from pylera1n.sshclient import SSHClient
 from pylera1n.pylera1n import Pylera1n
 
 coloredlogs.install(level=logging.DEBUG)
@@ -42,6 +42,13 @@ def ssh():
 def stages_cli(ctx, version: str, palera1n: str, ipsw: str, rootless: bool):
     ctx.obj = Pylera1n(Path(palera1n), product_version=version, ipsw_path=ipsw, rootless=rootless)
     logger.info(ctx.obj)
+
+
+@stages_cli.command()
+@click.pass_context
+def dfu(ctx):
+    """ enter DFU """
+    ctx.obj.enter_dfu()
 
 
 @stages_cli.command()

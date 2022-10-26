@@ -11,7 +11,7 @@ from zipfile import ZipFile
 
 import requests
 from paramiko.config import SSH_PORT
-from plumbum import local, FG
+from plumbum import local
 from pyimg4 import IM4P
 from pyipsw.pyipsw import get_devices
 from pymobiledevice3 import usbmux
@@ -25,7 +25,7 @@ from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
 
-from pylera1n.palera1n.sshclient import SSHClient
+from pylera1n.sshclient import SSHClient
 
 logger = logging.getLogger(__name__)
 
@@ -179,13 +179,13 @@ class Pylera1n:
                     patched_iboot = iboot.with_suffix('.patched')
 
                     if iboot.parts[-1] == 'iBEC':
-                        self.patch_iboot_component(decrypted_iboot, patched_iboot)
-                    else:
                         boot_args = 'rd=md0 debug=0x2014e -v wdt=-1 '
                         if self._chip_id in (0x8960, 0x7000, 0x7001):
                             # TODO: macos variant?
                             boot_args += '-restore'
                         self.patch_iboot_component(decrypted_iboot, patched_iboot, boot_args)
+                    else:
+                        self.patch_iboot_component(decrypted_iboot, patched_iboot)
 
                     im4p = patched_iboot
 
