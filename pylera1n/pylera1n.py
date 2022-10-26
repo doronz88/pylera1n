@@ -137,8 +137,7 @@ class Pylera1n:
                 f.write(stdout.read())
                 dump_file = Path(f.name)
 
-        self._img4tool('--convert', '-s', self._storage / f'{self._hardware_model}-{self._product_version}.shsh',
-                       dump_file)
+        self._img4tool('--convert', '-s', self._shsh_blob, dump_file)
         dump_file.unlink()
 
     @contextlib.contextmanager
