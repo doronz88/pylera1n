@@ -1,5 +1,4 @@
 import logging
-import os
 from pathlib import Path
 
 import click
@@ -16,8 +15,6 @@ coloredlogs.install(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 PALERA1N_PATH = Path(pylera1n.__file__).parent / 'palera1n'
-BOOT_LOGO_PATH = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-BINARIES_PATH = PALERA1N_PATH / 'binaries' / os.uname().sysname
 
 
 @click.group()
