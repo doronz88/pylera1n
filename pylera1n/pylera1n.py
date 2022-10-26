@@ -33,7 +33,7 @@ def wait(seconds: int) -> None:
 
 class Pylera1n:
     def __init__(self, palera1n: Path, product_version: str = None, ipsw_path: str = None,
-                 rootless=True, tips_app: str = None):
+                 rootless=True, pogo: str = None):
         self._board_id = None
         self._chip_id = None
         self._hardware_model = None
@@ -52,7 +52,7 @@ class Pylera1n:
         self._ipsw_path = ipsw_path
         self._ipsw: Optional[IPSW] = None
         self._rootless = rootless
-        self._tips = ZipFile(tips_app)
+        self._tips = ZipFile(pogo)
         self._init_device_info()
         self._init_ipsw()
 
