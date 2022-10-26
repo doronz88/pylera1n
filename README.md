@@ -16,13 +16,19 @@ python3 -m pip install -e pylera1n
 ## Usage
 
 ```
-Usage: python -m pylera1n [OPTIONS] PRODUCT_VERSION
+Usage: python -m pylera1n stages [OPTIONS] COMMAND [ARGS]...
 
 Options:
-  -b, --binaries DIRECTORY
-  --ipsw FILE
-  --rootless
-  --tips FILE
-  --help                    Show this message and exit.
+  -v, --version TEXT    iOS version. Can be queried automatically when device
+                        is in Normal mode
+  --palera1n DIRECTORY  Path to paler1n repo
+  --ipsw FILE           14.8 IPSW
+  --rootless            Patch Tips.app
+  --help                Show this message and exit.
+
+Commands:
+  dump-blobs  dump blobs
+  full        perform all jailbreak stages
+  ramdisk     boot into 14.8 ramdisk
 ```
 

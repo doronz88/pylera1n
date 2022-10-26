@@ -57,14 +57,14 @@ def ramdisk(ctx):
 @stages_cli.command()
 @click.pass_context
 def dump_blobs(ctx):
-    """ boot into 14.8 ramdisk """
+    """ dump blobs """
     ctx.obj.dump_blobs()
 
 
 @stages_cli.command()
 @click.pass_context
 def full(ctx):
-    """ boot into 14.8 ramdisk """
+    """ perform all jailbreak stages """
     ctx.obj.exploit()
 
 
