@@ -4,14 +4,18 @@ import os
 import shutil
 import tempfile
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
 from zipfile import ZipFile
 
+import requests
+from paramiko.config import SSH_PORT
 from plumbum import local, FG
 from pyimg4 import IM4P
 from pyipsw.pyipsw import get_devices
-from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError
+from pymobiledevice3 import usbmux
+from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError, ConnectionFailedError
 from pymobiledevice3.irecv import IRecv, Mode
 from pymobiledevice3.lockdown import LockdownClient
 from pymobiledevice3.restore.img4 import img4_get_component_tag
@@ -21,9 +25,12 @@ from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
 
+from pylera1n.palera1n.sshclient import SSHClient
+
 logger = logging.getLogger(__name__)
 
 OS_VARIANT = os.uname().sysname
+DEFAULT_STORAGE = Path('~/.pylera1n').expanduser()
 
 
 def wait(seconds: int) -> None:
@@ -31,9 +38,36 @@ def wait(seconds: int) -> None:
         time.sleep(1)
 
 
+def download_gaster(output: Path, os_version: str = os.uname().sysname):
+    gaster_zip = requests.get(
+        f'https://nightly.link/verygenericname/gaster/workflows/makefile/main/gaster-{os_version}.zip').content
+    gaster_zip = ZipFile(BytesIO(gaster_zip))
+    with gaster_zip.open('gaster') as f:
+        output.write_bytes(f.read())
+        output.chmod(0o755)
+
+
+def download_pogo(output: Path) -> None:
+    pogo = requests.get('https://nightly.link/elihwyma/Pogo/workflows/build/root/Pogo.zip').content
+    pogo = ZipFile(BytesIO(pogo))
+    with pogo.open('Pogo.ipa') as f:
+        output.write_bytes(f.read())
+
+
 class Pylera1n:
     def __init__(self, palera1n: Path, product_version: str = None, ipsw_path: str = None,
-                 rootless=True, pogo: str = None):
+                 rootless=True, storage: Path = DEFAULT_STORAGE):
+        storage.mkdir(parents=True, exist_ok=True)
+        self._storage = storage
+
+        gaster_path = storage / 'gaster'
+        if not gaster_path.exists():
+            download_gaster(gaster_path)
+
+        pogo_path = storage / 'Pogo.ipa'
+        if not pogo_path.exists():
+            download_pogo(pogo_path)
+
         self._board_id = None
         self._chip_id = None
         self._hardware_model = None
@@ -42,7 +76,7 @@ class Pylera1n:
         self._palera1n = palera1n
         self._binaries = palera1n / 'binaries' / OS_VARIANT
         self._ramdisk = palera1n / 'ramdisk'
-        self._gaster = local[str(palera1n / 'gaster')]
+        self._gaster = local[str(gaster_path)]
         self._img4tool = local[str(self._binaries / 'img4tool')]
         self._img4 = local[str(self._binaries / 'img4')]
         self._iboot64patcher = local[str(self._binaries / 'iBoot64Patcher')]
@@ -52,9 +86,13 @@ class Pylera1n:
         self._ipsw_path = ipsw_path
         self._ipsw: Optional[IPSW] = None
         self._rootless = rootless
-        self._tips = ZipFile(pogo)
+        self._tips = ZipFile(pogo_path)
         self._init_device_info()
         self._init_ipsw()
+
+        shsh_blob_dir = self._storage / 'shsh'
+        shsh_blob_dir.mkdir(exist_ok=True, parents=True)
+        self._shsh_blob = shsh_blob_dir / f'{self._hardware_model}-{self._product_version}.shsh'
 
     @property
     def in_dfu(self) -> bool:
@@ -66,6 +104,11 @@ class Pylera1n:
                 return irecv.mode == Mode.DFU_MODE
 
     def exploit(self) -> None:
+        if not self._shsh_blob.exists():
+            self.boot_ramdisk()
+            self.dump_blobs()
+
+    def boot_ramdisk(self) -> None:
         if self._product_version is None:
             raise Exception('cannot exploit without product_version')
         logger.info('waiting for device to enter DFU')
@@ -76,8 +119,32 @@ class Pylera1n:
         with self.create_ramdisk() as ramdisk:
             self.boot(ramdisk)
 
+    def dump_blobs(self) -> None:
+        device = None
+
+        while device is None:
+            # wait for device to boot
+            device = usbmux.select_device()
+
+        sock = None
+        while sock is None:
+            # wait for ssh server to start
+            sock = device.connect(SSH_PORT)
+
+        with SSHClient(sock) as ssh:
+            stdin, stdout, stderr = ssh.exec('cat /dev/rdisk1')
+            with tempfile.NamedTemporaryFile('wb', delete=False) as f:
+                f.write(stdout.read())
+                dump_file = Path(f.name)
+
+        self._img4tool('--convert', '-s', self._storage / f'{self._hardware_model}-{self._product_version}.shsh',
+                       dump_file)
+        dump_file.unlink()
+
     @contextlib.contextmanager
     def create_ramdisk(self) -> None:
+        logger.info('creating ramdisk')
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
             local_build_manifest = temp_dir / 'BuildManifest.plist'
@@ -173,7 +240,9 @@ class Pylera1n:
 
             yield temp_dir
 
-    def boot(self, ramdisk: Path):
+    def boot(self, ramdisk: Path) -> None:
+        logger.info('booting ramdisk')
+
         self._gaster('reset')
 
         # TODO: is really needed?
@@ -245,7 +314,7 @@ class Pylera1n:
                 irecv.reboot()
 
     def pwn(self) -> None:
-        self._gaster['pwn'] & FG
+        self._gaster('pwn')
 
     def decrypt(self, payload: Path, output: Path) -> None:
         self._gaster('decrypt', payload, output)
@@ -300,7 +369,7 @@ class Pylera1n:
                 self._chip_id = lockdown.chip_id
                 self._hardware_model = lockdown.hardware_model
                 self._product_type = lockdown.product_type
-        except NoDeviceConnectedError:
+        except (NoDeviceConnectedError, ConnectionFailedError):
             with IRecv(timeout=1) as irecv:
                 self._board_id = irecv.board_id
                 self._chip_id = irecv.chip_id

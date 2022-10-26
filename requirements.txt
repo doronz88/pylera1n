@@ -1,3 +1,7 @@
 pymobiledevice3
 pyusb
 pyimg4
+click
+coloredlogs
+requests
+paramiko
