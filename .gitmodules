@@ -1,0 +1,3 @@
+[submodule "pylera1n/palera1n"]
+	path = pylera1n/palera1n
+	url = git@github.com:palera1n/palera1n.git

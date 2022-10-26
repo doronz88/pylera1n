@@ -1,0 +1,16 @@
+.DS_Store
+*/.DS_Store
+binaries/Linux/gaster
+binaries/Darwin/gaster
+work
+rdwork
+boot*
+!bootlogo.im4p
+.irecovery
+BuildManifest.plist
+blobs
+tweaksinstalled
+logs
+.idea
+*.pyc
+*.egg-info
