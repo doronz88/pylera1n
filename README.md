@@ -2,7 +2,8 @@
 
 ## Description
 
-Python adaptation for [pelara1n](https://github.com/palera1n/palera1n).
+Python adaptation for [pelara1n](https://github.com/palera1n/palera1n). **This project is very much a WIP.**
+Currently allows to boot into ramdisk and connect to SSH on all checkm8-supported devices.
 
 ## Installation
 
@@ -16,19 +17,30 @@ python3 -m pip install -e pylera1n
 ## Usage
 
 ```
-Usage: python -m pylera1n stages [OPTIONS] COMMAND [ARGS]...
+Usage: python -m pylera1n [OPTIONS] COMMAND [ARGS]...
 
 Options:
-  -v, --version TEXT    iOS version. Can be queried automatically when device
-                        is in Normal mode
-  --palera1n DIRECTORY  Path to paler1n repo
-  --ipsw FILE           14.8 IPSW
-  --rootless            Patch Tips.app
-  --help                Show this message and exit.
+  --help  Show this message and exit.
 
 Commands:
-  dump-blobs  dump blobs
-  full        perform all jailbreak stages
-  ramdisk     boot into 14.8 ramdisk
+  jailbreak      perform full jailbreak (not yet supported)
+  ramdisk        boot into ramdisk
+  ramdisk-stage  create blobs, install pogo and patch nvram if on...
+  ssh            connect via ssh
 ```
 
+### Modifying `/private`
+
+```shell
+# boot into ramdisk, IPSW can also be downloaded automatically from internet
+python3 -m pylera1n ramdisk --ipsw '~/Downloads/iPhone10,3,iPhone10,6_14.8_18H17_Restore.ipsw'
+
+# connect to ssh
+python3 -m pylera1n ssh
+
+# mount /private
+/usr/bin/mount_filesystems
+
+# now you can access /private from /mnt2
+ls /mnt2
+```

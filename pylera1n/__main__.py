@@ -64,7 +64,8 @@ def ramdisk_stage(version: str, palera1n: str, ipsw: str, rootless: bool):
               help='Path to paler1n repo')
 @click.option('--ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
 @click.option('--rootless', is_flag=True, help='Patch Tips.app')
-def full(version: str, palera1n: str, ipsw: str, rootless: bool):
+def jailbreak(version: str, palera1n: str, ipsw: str, rootless: bool):
+    """ perform full jailbreak (not yet supported) """
     exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ipsw, rootless=rootless)
     exploit.jailbreak()
 

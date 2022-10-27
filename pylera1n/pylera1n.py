@@ -129,8 +129,6 @@ class Pylera1n:
 
     def boot_ramdisk(self, recreate_ramdisk=False) -> None:
         """ boot into ramdisk """
-        if self._product_version is None:
-            raise Exception('cannot exploit without product_version')
         logger.info('waiting for device to enter DFU')
         self.enter_dfu()
         logger.info('pwn-ing device')
@@ -510,6 +508,8 @@ class Pylera1n:
 
     def _init_ipsw(self) -> None:
         if self._ipsw_path is None:
+            if self._product_version is None:
+                raise Exception('cannot download correct IPSW without a product_version')
             devices = list(get_devices(f"'{self._product_type}' == device and '{self._product_version}' == version"))
             assert len(devices) == 1
             self._ipsw = IPSW(RemoteZip(devices[0]['url']))
