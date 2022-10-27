@@ -1,4 +1,3 @@
-import contextlib
 import logging
 import os
 import shutil
@@ -57,6 +56,8 @@ def download_pogo(output: Path) -> None:
 RESTORE_COMPONENTS = ('iBSS', 'iBEC', 'RestoreDeviceTree', 'RestoreRamDisk', 'RestoreTrustCache',
                       'RestoreKernelCache', 'RestoreLogo')
 
+BOOT_COMPONENTS = ('iBSS', 'iBEC', 'DeviceTree', 'StaticTrustCache', 'KernelCache', 'RestoreLogo')
+
 
 class Pylera1n:
     def __init__(self, palera1n: Path, product_version: str = None, ramdisk_ipsw: str = None, ipsw: str = None,
@@ -102,30 +103,37 @@ class Pylera1n:
         self._ramdisk_dir = self._storage / 'ramdisk' / self._hardware_model
         self._ramdisk_dir.mkdir(exist_ok=True, parents=True)
 
-        boot_dir = self._storage / 'boot'
-        boot_dir.mkdir(exist_ok=True, parents=True)
-        self._boot_dir = boot_dir / f'{self._hardware_model}'
+        self._boot_dir = self._storage / 'boot' / self._hardware_model
+        self._boot_dir.mkdir(exist_ok=True, parents=True)
 
-        bpatch_dir = self._storage / 'patches'
-        self._bpatch_file = bpatch_dir / f'{self._hardware_model.replace("ap", "")}.bpatch'
+        self._bpatch_file = self._storage / 'patches' / f'{self._hardware_model.replace("ap", "")}.bpatch'
 
     @property
     def in_dfu(self) -> bool:
         try:
             with LockdownClient():
                 return False
+        except ConnectionFailedError:
+            # the device is in the midst of a reboot
+            return False
         except NoDeviceConnectedError:
             with IRecv(timeout=1) as irecv:
                 return irecv.mode == Mode.DFU_MODE
 
-    def jailbreak(self) -> None:
-        if not self._shsh_blob.exists():
-            self.ramdisk_stage()
-            if not self._rootless:
-                self.exec_ssh_command('/sbin/reboot')
-            else:
-                raise NotImplementedError('should enter normal and then recovery again')
-        self.create_boot()
+    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False) -> None:
+        logger.info('jailbreaking')
+
+        if not self._shsh_blob.exists() or recreate_ramdisk:
+            logger.info('creating ramdisk')
+            self.ramdisk_stage(recreate_ramdisk=recreate_ramdisk)
+
+        self.enter_dfu()
+        self.pwn()
+
+        if not self.has_prepared_boot or recreate_boot:
+            self.create_patched_boot()
+
+        self._boot_boot()
 
     def boot_ramdisk(self, recreate_ramdisk=False) -> None:
         """ boot into ramdisk """
@@ -145,16 +153,26 @@ class Pylera1n:
                 return False
         return True
 
-    @contextlib.contextmanager
-    def ramdisk_stage(self) -> None:
+    @property
+    def has_prepared_boot(self) -> bool:
+        for component in BOOT_COMPONENTS:
+            if not ((self._boot_dir / component).with_suffix('.img4').exists()):
+                return False
+        return True
+
+    def ramdisk_stage(self, recreate_ramdisk=False) -> None:
         """ create blobs, install pogo and patch nvram if on non-rootless """
-        self.boot_ramdisk()
+        self.boot_ramdisk(recreate_ramdisk)
 
         device = None
+
+        logger.info('waiting for device to be recognized via usb')
 
         while device is None:
             # wait for device to boot
             device = usbmux.select_device()
+
+        logger.info('waiting for ssh server to start')
 
         sock = None
         while sock is None:
@@ -166,6 +184,10 @@ class Pylera1n:
             if not self._rootless:
                 self._disable_nvram_stuff(ssh)
             self._dump_blobs(ssh)
+
+            # make sure device reboots into recovery
+            ssh.exec('/usr/sbin/nvram auto-boot=false')
+            ssh.exec('/sbin/reboot')
 
     @staticmethod
     def exec_ssh_command(command: str) -> None:
@@ -193,6 +215,8 @@ class Pylera1n:
         # extract
         for component in ('iBSS', 'iBEC', 'RestoreDeviceTree', 'RestoreRamDisk', 'RestoreTrustCache',
                           'RestoreKernelCache'):
+            logger.info(f'patching {component}')
+
             local_component = self._ramdisk_dir / component
             local_component.write_bytes(self._ramdisk_ipsw.read(build_identity.get_component_path(component)))
 
@@ -253,14 +277,15 @@ class Pylera1n:
                 self._gtar('-x', '--no-overwrite-dir', '-f', self._ramdisk / 'other' / 'ramdisk.tar.gz', '-C',
                            mountpoint)
 
-                if not self._rootless:
-                    # patch Tips app
-                    local_app = self._ramdisk_dir / 'Pogo'
-                    self._tips.extractall(local_app)
-                    loader_app = mountpoint / 'usr' / 'local' / 'bin' / 'loader.app'
-                    shutil.rmtree(mountpoint / loader_app)
-                    shutil.copytree(local_app / 'Payload' / 'Pogo.app', loader_app)
-                    shutil.move(loader_app / 'Pogo', loader_app / 'Tips')
+                logger.info('extracting Pogo.app/* contents into /usr/local/bin/loader.app/*')
+                local_app = self._ramdisk_dir / 'Pogo'
+                self._tips.extractall(local_app)
+                loader_app = mountpoint / 'usr' / 'local' / 'bin' / 'loader.app'
+                shutil.rmtree(mountpoint / loader_app)
+                shutil.copytree(local_app / 'Payload' / 'Pogo.app', loader_app)
+
+                logger.info('renaming /usr/local/bin/loader.app/Pogo -> /usr/local/bin/loader.app/Tips')
+                shutil.move(loader_app / 'Pogo', loader_app / 'Tips')
 
                 self._hdiutil('detach', '-force', mountpoint)
                 self._hdiutil('resize', '-sectors', 'min', dmg)
@@ -270,9 +295,8 @@ class Pylera1n:
             # create IMG4
             self.create_img4(im4p, img4, im4m, fourcc, patch, wrap=wrap)
 
-    @contextlib.contextmanager
-    def create_boot(self):
-        logger.info('creating boot')
+    def create_patched_boot(self) -> None:
+        logger.info('creating patched boot')
 
         if self._ipsw is None:
             self._init_ipsw()
@@ -281,83 +305,126 @@ class Pylera1n:
 
         self.pwn()
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir = Path(temp_dir)
-            im4m = temp_dir / 'IM4M'
-            self._img4tool('-e', '-s', self._shsh_blob, '-m', im4m)
+        im4m = self._boot_dir / 'IM4M'
+        self._img4tool('-e', '-s', self._shsh_blob, '-m', im4m)
 
-            local_build_manifest = temp_dir / 'BuildManifest.plist'
-            local_build_manifest.write_bytes(self._ramdisk_ipsw.read('BuildManifest.plist'))
+        local_build_manifest = self._boot_dir / 'BuildManifest.plist'
+        local_build_manifest.write_bytes(self._ipsw.read('BuildManifest.plist'))
 
-            # use costume RestoreLogo
-            self.create_img4(self._palera1n / 'other' / 'bootlogo.im4p', temp_dir / 'RestoreLogo.img4', im4m,
-                             img4_get_component_tag('RestoreLogo').decode(), wrap=True)
+        # use costume RestoreLogo
+        self.create_img4(self._palera1n / 'other' / 'bootlogo.im4p', self._boot_dir / 'RestoreLogo.img4', im4m,
+                         'rlgo', wrap=True)
 
-            for component in ('iBSS', 'iBEC', 'DeviceTree', 'StaticTrustCache', 'KernelCache'):
-                logger.info(f'extracting {component}')
-                local_component = temp_dir / component
-                component_path = self._ramdisk_ipsw.read(build_identity.get_component_path(component))
+        for component in ('iBSS', 'iBEC', 'DeviceTree', 'StaticTrustCache', 'KernelCache'):
+            logger.info(f'patching {component}')
+            local_component = self._boot_dir / component
+            component_path = build_identity.get_component_path(component)
+
+            if not self._rootless:
+                if component in ('iBSS', 'iBEC'):
+                    component_path = component_path.replace('RELEASE', 'DEVELOPMENT')
+                if component == 'KernelCache':
+                    component_path = component_path.replace('release', 'development')
+
+            local_component.write_bytes(self._ipsw.read(component_path))
+            img4 = local_component.with_suffix('.img4')
+            im4p_file = local_component
+
+            if component in ('iBSS', 'iBEC'):
+                iboot = local_component
+                iboot_dec = iboot.with_suffix('.dec')
+                iboot_patched = iboot.with_suffix('.patched')
+                boot_args = None
+                self.decrypt(iboot, iboot_dec)
+                if self._rootless and component == 'iBEC':
+                    boot_args = '-v keepsyms=1 debug=0x2014e panic-wait-forever=1'
+                self.patch_iboot_component(iboot_dec, iboot_patched, boot_args)
+                self.create_img4(iboot_patched, img4, im4m, component.lower(), wrap=True)
+
+            if component == 'KernelCache':
+                kcache_raw = self._boot_dir / 'kcache.raw'
+                kernelcache_buf = local_component.read_bytes()
+                kpp_bin = self._boot_dir / 'kpp.bin'
+                kcache_patched = self._boot_dir / 'kcache.patched'
+                fourcc = 'rkrn'
+
+                im4p = IM4P(kernelcache_buf)
+                im4p.payload.decompress()
+                kcache_raw.write_bytes(im4p.payload.output().data)
+
+                if self._rootless:
+                    if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
+                        kpp_bin.write_bytes(im4p.payload.extra)
 
                 if not self._rootless:
-                    if component in ('iBSS', 'iBEC'):
-                        component_path = component_path.replace('RELEASE', 'DEVELOPMENT')
-                    if component == 'KernelCache':
-                        component_path = component_path.replace('release', 'development')
-                local_component.write_bytes(component_path)
-                img4 = local_component.with_suffix('.img4')
-                fourcc = img4_get_component_tag(component)
-                im4p_file = local_component
+                    self.create_img4(im4p_file, img4, im4m, fourcc, patch=self._bpatch_file)
+                else:
+                    self.patch_kernelcache(kcache_raw, kcache_patched, flag_o=True)
 
-                if component in ('iBSS', 'iBEC'):
-                    iboot = local_component
-                    iboot_dec = iboot.with_suffix('.dec')
-                    iboot_patched = iboot.with_suffix('.patched')
-                    boot_args = None
-                    self.decrypt(iboot, iboot_dec)
-                    if self._rootless and component == 'iBEC':
-                        boot_args = '-v keepsyms=1 debug=0x2014e panic-wait-forever=1'
-                    self.patch_iboot_component(iboot_dec, iboot_patched, boot_args)
-                    self.create_img4(iboot_patched, img4, im4m, fourcc, wrap=True)
+                    im4p_file = self._boot_dir / 'krnlboot.im4p'
 
-                if component == 'KernelCache':
-                    kcache_raw = temp_dir / 'kcache.raw'
-                    kernelcache_buf = local_component.read_bytes()
-                    kpp_bin = temp_dir / 'kpp.bin'
-                    kcache_patched = temp_dir / 'kcache.patched'
-
-                    im4p = IM4P(kernelcache_buf)
-                    kcache_raw.write_bytes(im4p.payload.output().data)
-
-                    if self._rootless:
-                        if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                            kpp_bin.write_bytes(im4p.payload.extra)
-
-                    if not self._rootless:
-                        self.create_img4(im4p_file, img4, im4m, fourcc, patch=self._bpatch_file)
+                    if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
+                        im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
+                        im4p.payload.extra = open(kpp_bin, 'rb')
+                        im4p.payload.compress(Compression.LZSS)
+                        im4p_file.write_bytes(im4p.output())
                     else:
-                        self.patch_kernelcache(kcache_raw, kcache_patched, flag_o=True)
+                        im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
+                        im4p.payload.compress(Compression.LZSS)
+                        im4p_file.write_bytes(im4p.output())
 
-                        im4p_file = temp_dir / 'krnlboot.im4p'
-
-                        if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                            im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
-                            im4p.payload.extra = open(kpp_bin, 'rb')
-                            im4p.payload.compress(Compression.LZSS)
-                            im4p_file.write_bytes(im4p.output())
-                        else:
-                            im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
-                            im4p.payload.compress(Compression.LZSS)
-                            im4p_file.write_bytes(im4p.output())
-
-                        self.create_img4(im4p_file, img4, im4m, fourcc)
-
-                if component == 'DeviceTree':
                     self.create_img4(im4p_file, img4, im4m, fourcc)
 
-                if component == 'StaticTrustCache':
-                    self.create_img4(im4p_file, img4, im4m, fourcc)
+            if component == 'DeviceTree':
+                self.create_img4(im4p_file, img4, im4m, 'rdtr')
 
-            yield temp_dir
+            if component == 'StaticTrustCache':
+                self.create_img4(im4p_file, img4, im4m, 'rtsc')
+
+    def _boot_boot(self) -> None:
+        logger.info('booting patched boot image')
+
+        self._gaster('reset')
+
+        # TODO: is really needed?
+        time.sleep(1)
+
+        with IRecv() as irecv:
+            assert irecv.mode == Mode.DFU_MODE
+            logger.info('sending iBSS')
+            irecv.send_buffer((self._boot_dir / 'iBSS.img4').read_bytes())
+
+        try:
+            with IRecv() as irecv:
+                assert irecv.mode == Mode.RECOVERY_MODE_2
+                logger.info('sending iBEC')
+                irecv.send_buffer((self._boot_dir / 'iBEC.img4').read_bytes())
+
+                if self._chip_id in (0x8010, 0x8015, 0x8011, 0x8012):
+                    irecv.send_command('go')
+        except USBError:
+            # device will reboot and cause a broken pipe
+            pass
+
+        with IRecv() as irecv:
+            logger.info('sending RestoreLogo')
+            irecv.send_buffer((self._boot_dir / 'RestoreLogo.img4').read_bytes())
+            irecv.send_command('setpicture 0x1')
+
+            logger.info('sending DeviceTree')
+            irecv.send_buffer((self._boot_dir / 'DeviceTree.img4').read_bytes())
+            irecv.send_command('devicetree')
+
+            logger.info('sending StaticTrustCache')
+            irecv.send_buffer((self._boot_dir / 'StaticTrustCache.img4').read_bytes())
+            irecv.send_command('firmware')
+
+            logger.info('sending KernelCache')
+            irecv.send_buffer((self._boot_dir / 'KernelCache.img4').read_bytes())
+            try:
+                irecv.send_command('bootx')
+            except USBError:
+                pass
 
     def _boot_ramdisk(self) -> None:
         logger.info('booting ramdisk')
@@ -476,6 +543,7 @@ class Pylera1n:
                 except IRecvNoDeviceConnectedError:
                     continue
                 if self.in_dfu:
+                    logger.info('device entered DFU')
                     return
             logger.error('Failed to enter DFU')
 
@@ -518,14 +586,26 @@ class Pylera1n:
 
     @staticmethod
     def _install_pogo(ssh: SSHClient) -> None:
+        logger.info('mounting filesystems')
         ssh.exec('/usr/bin/mount_filesystems')
-        stdin, stdout, stderr = ssh.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name \'Tips.app\'')
-        tips_dir = stdout.read().strip()
+
+        while True:
+            stdin, stdout, stderr = ssh.exec('/bin/ls /mnt2')
+            if stdout.read().strip():
+                break
+
+        stdin, stdout, stderr = ssh.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app')
+        tips_dir = stdout.read().strip().decode()
         if not tips_dir:
             logger.warning(
                 'Tips is not installed. Once your device reboots, install Tips from the App Store and retry')
+            ssh.exec('/sbin/reboot')
             return
+
+        logger.info(f'copying /usr/local/bin/loader.app/* -> {tips_dir}/*')
         ssh.exec(f'/bin/cp -rf /usr/local/bin/loader.app/* {tips_dir}')
+
+        logger.info('fixing Tips.app permissions')
         ssh.exec(f'/usr/sbin/chown 33 {tips_dir}/Tips')
         ssh.exec(f'/bin/chmod 755 {tips_dir}/Tips {tips_dir}/PogoHelper')
         ssh.exec(f'/usr/sbin/chown 0 {tips_dir}/PogoHelper')
@@ -543,7 +623,7 @@ class Pylera1n:
         ssh.exec('/usr/sbin/nvram root-live-fs=1')
         ssh.exec('/usr/sbin/nvram auto-boot=false')
 
-    def _dump_blobs(self, ssh: SSHClient):
+    def _dump_blobs(self, ssh: SSHClient) -> None:
         stdin, stdout, stderr = ssh.exec('cat /dev/rdisk1')
         with tempfile.NamedTemporaryFile('wb', delete=False) as f:
             f.write(stdout.read())
