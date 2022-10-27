@@ -7,8 +7,8 @@ from paramiko.config import SSH_PORT
 from pymobiledevice3 import usbmux
 
 import pylera1n
-from pylera1n.sshclient import SSHClient
 from pylera1n.pylera1n import Pylera1n
+from pylera1n.sshclient import SSHClient
 
 coloredlogs.install(level=logging.DEBUG)
 
@@ -32,44 +32,41 @@ def ssh():
         ssh.interact()
 
 
-@cli.group('stages')
+@cli.command()
 @click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
 @click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
               help='Path to paler1n repo')
 @click.option('--ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
 @click.option('--rootless', is_flag=True, help='Patch Tips.app')
-@click.pass_context
-def stages_cli(ctx, version: str, palera1n: str, ipsw: str, rootless: bool):
-    ctx.obj = Pylera1n(Path(palera1n), product_version=version, ipsw_path=ipsw, rootless=rootless)
-    logger.info(ctx.obj)
+def ramdisk(version: str, palera1n: str, ipsw: str, rootless: bool):
+    """ boot into ramdisk """
+    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ipsw, rootless=rootless)
+    logger.info(exploit)
+    exploit.boot_ramdisk()
 
 
-@stages_cli.command()
-@click.pass_context
-def dfu(ctx):
-    """ enter DFU """
-    ctx.obj.enter_dfu()
+@cli.command()
+@click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
+@click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
+              help='Path to paler1n repo')
+@click.option('--ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
+@click.option('--rootless', is_flag=True, help='Patch Tips.app')
+def ramdisk_stage(version: str, palera1n: str, ipsw: str, rootless: bool):
+    """ create blobs, install pogo and patch nvram if on non-rootless """
+    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ipsw, rootless=rootless)
+    logger.info(exploit)
+    exploit.ramdisk_stage()
 
 
-@stages_cli.command()
-@click.pass_context
-def ramdisk(ctx):
-    """ boot into 14.8 ramdisk """
-    ctx.obj.boot_ramdisk()
-
-
-@stages_cli.command()
-@click.pass_context
-def dump_blobs(ctx):
-    """ dump blobs """
-    ctx.obj.dump_blobs()
-
-
-@stages_cli.command()
-@click.pass_context
-def full(ctx):
-    """ perform all jailbreak stages """
-    ctx.obj.exploit()
+@cli.command()
+@click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
+@click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
+              help='Path to paler1n repo')
+@click.option('--ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
+@click.option('--rootless', is_flag=True, help='Patch Tips.app')
+def full(version: str, palera1n: str, ipsw: str, rootless: bool):
+    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ipsw, rootless=rootless)
+    exploit.jailbreak()
 
 
 if __name__ == '__main__':

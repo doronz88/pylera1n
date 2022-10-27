@@ -5,3 +5,7 @@ click
 coloredlogs
 requests
 paramiko
+plumbum
+pyipsw
+remotezip
+tqdm
