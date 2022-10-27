@@ -2,7 +2,7 @@
 
 ## Description
 
-Python adaptation for [pelara1n](https://github.com/palera1n/palera1n). **This project is very much a WIP.**
+Python adaptation for [palera1n](https://github.com/palera1n/palera1n). **This project is very much a WIP.**
 Currently allows to boot into ramdisk and connect to SSH on all checkm8-supported devices.
 
 ## Installation
