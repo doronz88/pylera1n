@@ -48,6 +48,18 @@ def ssh():
 
 
 @cli.command(cls=Command)
+@click.argument('source', type=click.Path(file_okay=True, dir_okay=False, exists=True))
+@click.argument('destination')
+def put_file(source, destination):
+    """ put file over ssh """
+    device = usbmux.select_device()
+    assert device
+
+    with SSHClient(device.connect(SSH_PORT)) as ssh:
+        ssh.put_file(source, destination)
+
+
+@cli.command(cls=Command)
 @click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
 @click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
               help='Path to paler1n repo')

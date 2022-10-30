@@ -38,6 +38,7 @@ def wait(seconds: int) -> None:
 
 
 def download_gaster(output: Path, os_version: str = os.uname().sysname):
+    logger.info('downloading gaster')
     gaster_zip = requests.get(
         f'https://nightly.link/verygenericname/gaster/workflows/makefile/main/gaster-{os_version}.zip').content
     gaster_zip = ZipFile(BytesIO(gaster_zip))
@@ -47,7 +48,8 @@ def download_gaster(output: Path, os_version: str = os.uname().sysname):
 
 
 def download_pogo(output: Path) -> None:
-    pogo = requests.get('https://nightly.link/elihwyma/Pogo/workflows/build/root/Pogo.zip').content
+    logger.info('downloading pogo')
+    pogo = requests.get('https://nightly.link/doronz88/Pogo/workflows/build/master/Pogo.zip').content
     pogo = ZipFile(BytesIO(pogo))
     with pogo.open('Pogo.ipa') as f:
         output.write_bytes(f.read())
