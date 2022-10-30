@@ -32,7 +32,7 @@ Commands:
 ### Full jailbreak
 
 ```shell
-python3 -m pylera1n jailbreak
+python3 -m pylera1n jailbreak --rootless
 ```
 
 ### Modifying `/private`
