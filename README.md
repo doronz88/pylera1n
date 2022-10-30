@@ -23,10 +23,16 @@ Options:
   --help  Show this message and exit.
 
 Commands:
-  jailbreak      perform full jailbreak (not yet supported)
+  jailbreak      perform full jailbreak
   ramdisk        boot into ramdisk
   ramdisk-stage  create blobs, install pogo and patch nvram if on...
   ssh            connect via ssh
+```
+
+### Full jailbreak
+
+```shell
+python3 -m pylera1n jailbreak
 ```
 
 ### Modifying `/private`
