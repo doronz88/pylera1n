@@ -2,5 +2,5 @@ class Pylera1nException(Exception):
     pass
 
 
-class Checkm8Error(Pylera1nException):
+class MissingProductVersionError(Pylera1nException):
     pass
