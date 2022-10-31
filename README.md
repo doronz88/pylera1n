@@ -23,6 +23,7 @@ Options:
 
 Commands:
   jailbreak      perform full jailbreak
+  put-file       put file over ssh
   ramdisk        boot into ramdisk
   ramdisk-stage  create blobs, install pogo and patch nvram if on...
   ssh            connect via ssh
@@ -31,7 +32,7 @@ Commands:
 ### Full jailbreak
 
 ```shell
-python3 -m pylera1n jailbreak --rootless
+python3 -m pylera1n jailbreak
 ```
 
 ### Modifying `/private`
