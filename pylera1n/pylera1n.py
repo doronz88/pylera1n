@@ -50,7 +50,7 @@ def download_gaster(output: Path, os_version: str = os.uname().sysname):
 
 def download_pogo(output: Path) -> None:
     logger.info('downloading pogo')
-    pogo = requests.get('https://nightly.link/doronz88/Pogo/workflows/build/master/Pogo.zip').content
+    pogo = requests.get('https://nightly.link/elihwyma/Pogo/workflows/build/root/Pogo.zip').content
     pogo = ZipFile(BytesIO(pogo))
     with pogo.open('Pogo.ipa') as f:
         output.write_bytes(f.read())
