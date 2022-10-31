@@ -22,9 +22,9 @@ pure python using:
 
 ```shell
 git clone git@github.com:doronz88/pylera1n.git
-git submodule update --init --recursive
 cd pylera1n
-python3 -m pip install -e pylera1n
+git submodule update --init --recursive
+python3 -m pip install -e .
 ```
 
 ## Usage
