@@ -65,7 +65,7 @@ def put_file(source, destination):
 @click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
               help='Path to paler1n repo')
 @click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
-def ramdisk(version: str, palera1n: str, ramdisk_ipsw: str, rootless: bool):
+def ramdisk(version: str, palera1n: str, ramdisk_ipsw: str):
     """ boot into ramdisk """
     exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw)
     logger.info(exploit)
