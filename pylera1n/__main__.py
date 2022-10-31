@@ -65,11 +65,12 @@ def put_file(source, destination):
 @click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
               help='Path to paler1n repo')
 @click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
-def ramdisk(version: str, palera1n: str, ramdisk_ipsw: str):
+@click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
+def ramdisk(version: str, palera1n: str, ramdisk_ipsw: str, recreate_ramdisk: bool):
     """ boot into ramdisk """
     exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw)
     logger.info(exploit)
-    exploit.boot_ramdisk()
+    exploit.boot_ramdisk(recreate_ramdisk=recreate_ramdisk)
 
 
 @cli.command(cls=Command)
