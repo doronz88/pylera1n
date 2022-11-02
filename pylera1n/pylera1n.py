@@ -366,7 +366,7 @@ class Pylera1n:
                     else:
                         self.patch_kernelcache(kcache_raw, kcache_patched, flag_o=True)
 
-                        im4p_file = self._boot_dir / 'krnlboot.im4p'
+                        im4p_file = temp_dir / 'krnlboot.im4p'
 
                         if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
                             im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
