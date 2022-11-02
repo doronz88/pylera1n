@@ -11,15 +11,13 @@ from zipfile import ZipFile
 import requests
 from paramiko.config import SSH_PORT
 from plumbum import local
-from pyimg4 import IM4P, Compression
+from pyimg4 import IM4P, Compression, IMG4
 from pyipsw.pyipsw import get_devices
 from pymobiledevice3 import usbmux
 from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError, ConnectionFailedError
 from pymobiledevice3.irecv import IRecv, Mode
 from pymobiledevice3.lockdown import LockdownClient
-from pymobiledevice3.restore.img4 import img4_get_component_tag
 from pymobiledevice3.restore.ipsw.ipsw import IPSW
-from pymobiledevice3.services.diagnostics import DiagnosticsService
 from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
@@ -86,7 +84,6 @@ class Pylera1n:
         self._ramdisk = palera1n / 'ramdisk'
         self._gaster = local[str(gaster_path)]
         self._img4tool = local[str(self._binaries / 'img4tool')]
-        self._img4 = local[str(self._binaries / 'img4')]
         self._iboot64patcher = local[str(self._binaries / 'iBoot64Patcher')]
         self._kernel64patcher = local[str(self._binaries / 'Kernel64Patcher')]
         self._gtar = local[str(self._ramdisk / os.uname().sysname / 'gtar')]
@@ -210,13 +207,16 @@ class Pylera1n:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            im4m = temp_dir / 'IM4M'
-            self._img4tool('-e', '-s', self._ramdisk / 'shsh' / f'0x{self._chip_id:x}.shsh', '-m', im4m)
+            im4m_file = temp_dir / 'IM4M'
+            self._img4tool('-e', '-s', self._ramdisk / 'shsh' / f'0x{self._chip_id:x}.shsh', '-m', im4m_file)
             build_identity = self._ramdisk_ipsw.build_manifest.get_build_identity(self._hardware_model)
 
-            # use costume RestoreLogo
-            self.create_img4(self._palera1n / 'other' / 'bootlogo.im4p', self._ramdisk_dir / 'RestoreLogo.img4', im4m,
-                             img4_get_component_tag('RestoreLogo').decode(), wrap=True)
+            logger.info('patching RestoreLogo')
+            img4_file = self._ramdisk_dir / 'RestoreLogo.img4'
+            im4p_file = self._palera1n / 'other' / 'bootlogo.im4p'
+            im4m = im4m_file.read_bytes()
+            im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
+            img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=im4m).output())
 
             # extract
             for component in ('iBSS', 'iBEC', 'RestoreDeviceTree', 'RestoreRamDisk', 'RestoreTrustCache',
@@ -226,50 +226,49 @@ class Pylera1n:
                 local_component = temp_dir / component
                 local_component.write_bytes(self._ramdisk_ipsw.read(build_identity.get_component_path(component)))
 
-                im4p = local_component
-                img4 = (self._ramdisk_dir / component).with_suffix('.img4')
-                fourcc = img4_get_component_tag(component).decode()
-                patch = None
-                wrap = component in ('iBSS', 'iBEC', 'RestoreRamDisk')
+                im4p_file = local_component
+                img4_file = (self._ramdisk_dir / component).with_suffix('.img4')
 
                 # patch bootloader
                 if component in ('iBSS', 'iBEC'):
                     iboot = local_component
                     decrypted_iboot = iboot.with_suffix('.dec')
                     self.decrypt(iboot, decrypted_iboot)
-                    patched_iboot = iboot.with_suffix('.patched')
+                    patched_iboot_file = iboot.with_suffix('.patched')
 
                     if iboot.parts[-1] == 'iBEC':
                         boot_args = 'rd=md0 debug=0x2014e -v wdt=-1 '
                         if self._chip_id in (0x8960, 0x7000, 0x7001):
                             # TODO: macos variant?
                             boot_args += '-restore'
-                        self.patch_iboot_component(decrypted_iboot, patched_iboot, boot_args)
+                        self.patch_iboot_component(decrypted_iboot, patched_iboot_file, boot_args)
                     else:
-                        self.patch_iboot_component(decrypted_iboot, patched_iboot)
+                        self.patch_iboot_component(decrypted_iboot, patched_iboot_file)
 
-                    im4p = patched_iboot
+                    fourcc = component.lower()
+                    im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc=fourcc)
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
                 # patch kernelcache
-                if component == 'RestoreKernelCache':
+                elif component == 'RestoreKernelCache':
                     kcache_raw = temp_dir / 'kcache.raw'
                     kcache_patched = temp_dir / 'kcache.patched'
-                    kc_bpatch = temp_dir / 'kc.bpatch'
-                    im4p_payload = IM4P(im4p.read_bytes()).payload
+                    im4p_payload = IM4P(im4p_file.read_bytes()).payload
                     im4p_payload.decompress()
                     kcache_raw.write_bytes(im4p_payload.output().data)
                     self.patch_kernelcache(kcache_raw, kcache_patched)
-                    self.create_kernelcache_patch_file(kcache_raw.read_bytes(), kcache_patched.read_bytes(),
-                                                       kc_bpatch)
-                    patch = kc_bpatch
+
+                    im4p = IM4P(fourcc='rkrn', payload=kcache_patched.read_bytes())
+                    im4p.payload.compress(Compression.LZSS)
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
                 # patch RestoreRamDisk
-                if component == 'RestoreRamDisk':
+                elif component == 'RestoreRamDisk':
                     dmg = temp_dir / 'ramdisk.dmg'
-                    im4p = IM4P(local_component.read_bytes())
-                    dmg.write_bytes(im4p.payload.output().data)
-
-                    # self.create_img4(im4p, dmg, im4m, img4_get_component_tag(component).decode())
+                    im4p_file = IM4P(local_component.read_bytes())
+                    dmg.write_bytes(im4p_file.payload.output().data)
 
                     if self._hdiutil is None:
                         raise NotImplementedError('missing hdiutil')
@@ -295,10 +294,19 @@ class Pylera1n:
                     self._hdiutil('detach', '-force', mountpoint)
                     self._hdiutil('resize', '-sectors', 'min', dmg)
 
-                    im4p = dmg
+                    im4p = IM4P(payload=dmg.read_bytes(), fourcc='rdsk')
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
-                # create IMG4
-                self.create_img4(im4p, img4, im4m, fourcc, patch, wrap=wrap)
+                elif component == 'RestoreDeviceTree':
+                    im4p = IM4P(im4p_file.read_bytes())
+                    im4p.fourcc = 'rdtr'
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
+
+                elif component == 'RestoreTrustCache':
+                    img4 = IMG4(im4p=im4p_file.read_bytes(), im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
     def create_patched_boot(self) -> None:
         logger.info('creating patched boot')
@@ -313,12 +321,16 @@ class Pylera1n:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            im4m = temp_dir / 'IM4M'
-            self._img4tool('-e', '-s', self._shsh_blob, '-m', im4m)
+            im4m_file = temp_dir / 'IM4M'
+            self._img4tool('-e', '-s', self._shsh_blob, '-m', im4m_file)
 
             # use costume RestoreLogo
-            self.create_img4(self._palera1n / 'other' / 'bootlogo.im4p', self._boot_dir / 'RestoreLogo.img4', im4m,
-                             'rlgo', wrap=True)
+            logger.info('patching RestoreLogo')
+            img4_file = self._boot_dir / 'RestoreLogo.img4'
+            im4p_file = self._palera1n / 'other' / 'bootlogo.im4p'
+            im4m = im4m_file.read_bytes()
+            im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
+            img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=im4m).output())
 
             for component in ('iBSS', 'iBEC', 'DeviceTree', 'StaticTrustCache', 'KernelCache'):
                 logger.info(f'patching {component}')
@@ -332,59 +344,67 @@ class Pylera1n:
                         component_path = component_path.replace('release', 'development')
 
                 local_component.write_bytes(self._ipsw.read(component_path))
-                img4 = (self._boot_dir / component).with_suffix('.img4')
+                img4_file = (self._boot_dir / component).with_suffix('.img4')
                 im4p_file = local_component
 
                 if component in ('iBSS', 'iBEC'):
                     iboot = local_component
                     iboot_dec = iboot.with_suffix('.dec')
-                    iboot_patched = iboot.with_suffix('.patched')
+                    patched_iboot_file = iboot.with_suffix('.patched')
                     boot_args = None
                     self.decrypt(iboot, iboot_dec)
                     if component == 'iBEC':
                         boot_args = '-v keepsyms=1 debug=0x2014e panic-wait-forever=1'
-                    self.patch_iboot_component(iboot_dec, iboot_patched, boot_args)
-                    self.create_img4(iboot_patched, img4, im4m, component.lower(), wrap=True)
+                    self.patch_iboot_component(iboot_dec, patched_iboot_file, boot_args)
+
+                    fourcc = component.lower()
+                    im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc=fourcc)
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
                 if component == 'KernelCache':
-                    kcache_raw = temp_dir / 'kcache.raw'
+                    kcache_raw_file = temp_dir / 'kcache.raw'
                     kernelcache_buf = local_component.read_bytes()
                     kpp_bin = temp_dir / 'kpp.bin'
-                    kcache_patched = temp_dir / 'kcache.patched'
+                    kcache_patched_file = temp_dir / 'kcache.patched'
                     fourcc = 'rkrn'
 
                     im4p = IM4P(kernelcache_buf)
                     im4p.payload.decompress()
-                    kcache_raw.write_bytes(im4p.payload.output().data)
+                    kcache_raw_file.write_bytes(im4p.payload.output().data)
 
                     if not self._devel:
                         if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
                             kpp_bin.write_bytes(im4p.payload.extra)
 
                     if self._devel:
-                        self.create_img4(im4p_file, img4, im4m, fourcc, patch=self._bpatch_file)
+                        im4p = IM4P(kcache_patched_file.read_bytes())
+                        im4p.fourcc = fourcc
+                        img4 = IMG4(im4p=im4p, im4m=im4m)
+                        img4_file.write_bytes(img4.output())
                     else:
-                        self.patch_kernelcache(kcache_raw, kcache_patched, flag_o=True)
+                        self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
 
-                        im4p_file = temp_dir / 'krnlboot.im4p'
+                        im4p = IM4P(fourcc=fourcc, payload=kcache_patched_file.read_bytes())
+                        im4p.payload.compress(Compression.LZSS)
 
                         if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                            im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
                             im4p.payload.extra = open(kpp_bin, 'rb')
-                            im4p.payload.compress(Compression.LZSS)
-                            im4p_file.write_bytes(im4p.output())
-                        else:
-                            im4p = IM4P(fourcc=fourcc, payload=kcache_patched.read_bytes())
-                            im4p.payload.compress(Compression.LZSS)
-                            im4p_file.write_bytes(im4p.output())
 
-                        self.create_img4(im4p_file, img4, im4m, fourcc)
+                        img4 = IMG4(im4p=im4p, im4m=im4m)
+                        img4_file.write_bytes(img4.output())
 
-                if component == 'DeviceTree':
-                    self.create_img4(im4p_file, img4, im4m, 'rdtr')
+                elif component == 'DeviceTree':
+                    im4p = IM4P(im4p_file.read_bytes())
+                    im4p.fourcc = 'rdtr'
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
-                if component == 'StaticTrustCache':
-                    self.create_img4(im4p_file, img4, im4m, 'rtsc')
+                elif component == 'StaticTrustCache':
+                    im4p = IM4P(im4p_file.read_bytes())
+                    im4p.fourcc = 'rtsc'
+                    img4 = IMG4(im4p=im4p, im4m=im4m)
+                    img4_file.write_bytes(img4.output())
 
     def _boot_boot(self) -> None:
         logger.info('booting patched boot image')
@@ -482,24 +502,11 @@ class Pylera1n:
             except USBError:
                 pass
 
-    def create_img4(self, im4p: Path, output: Path, im4m: Path, fourcc: str = None, patch: Path = None,
-                    wrap=False) -> None:
-        args = ['-i', im4p, '-o', output]
-        if im4m is not None:
-            args += ['-M', im4m]
-        if fourcc is not None:
-            args += ['-T', fourcc]
-        if patch is not None:
-            args += ['-P', patch]
-        if wrap:
-            args += ['-A']
-        self._img4(args)
-
-    def reboot(self) -> None:
+    @staticmethod
+    def reboot() -> None:
         try:
             with LockdownClient() as lockdown:
-                with DiagnosticsService(lockdown) as diagnostics:
-                    diagnostics.restart()
+                lockdown.enter_recovery()
         except NoDeviceConnectedError:
             with IRecv(timeout=1) as irecv:
                 irecv.reboot()
@@ -533,13 +540,13 @@ class Pylera1n:
     def enter_dfu(self) -> None:
         while not self.in_dfu:
             print('Prepare to do the following to start enter DFU mode:')
-            print(' - Hold VolDown+Power for 5 seconds')
+            print(' - Hold VolDown+Power for 6 seconds')
             print(' - Keep holding VolDown for up to 10 seconds')
             input('HIT RETURN TO START> ')
             self.reboot()
 
-            print('[1] Hold VolDown+Power for 5 seconds')
-            wait(5)
+            print('[1] Hold VolDown+Power for 6 seconds')
+            wait(6)
             print('[2] Keep holding VolDown for up to 10 seconds')
             for _ in trange(10):
                 try:
