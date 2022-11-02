@@ -96,11 +96,15 @@ def ramdisk_stage(version: str, palera1n: str, ramdisk_ipsw: str, devel: bool, r
 @click.option('--devel', is_flag=True, help='Try using developement build instead of original')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
 @click.option('--recreate-boot', is_flag=True, help='Recreate boot if already exists')
+@click.option('--kernel-patches', type=click.Path(dir_okay=False, file_okay=True, exists=True),
+              help='Use costume patch file')
 def jailbreak(version: str, palera1n: str, ramdisk_ipsw: str, ipsw: str, devel: bool, recreate_ramdisk: bool,
-              recreate_boot: bool):
+              recreate_boot: bool, kernel_patches: str):
     """ perform full jailbreak """
+    if kernel_patches is not None:
+        kernel_patches = Path(kernel_patches)
     exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw, ipsw=ipsw, devel=devel)
-    exploit.jailbreak(recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot)
+    exploit.jailbreak(recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot, kernel_patches=kernel_patches)
 
 
 if __name__ == '__main__':

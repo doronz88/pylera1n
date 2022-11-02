@@ -9,6 +9,7 @@ from typing import Optional
 from zipfile import ZipFile
 
 import requests
+from keystone import Ks, KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN
 from paramiko.config import SSH_PORT
 from plumbum import local
 from pyimg4 import IM4P, Compression, IMG4
@@ -123,8 +124,11 @@ class Pylera1n:
             with IRecv(timeout=1) as irecv:
                 return irecv.mode == Mode.DFU_MODE
 
-    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False) -> None:
+    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, kernel_patches: Path = None) -> None:
         logger.info('jailbreaking')
+
+        if kernel_patches is not None:
+            recreate_boot = True
 
         if not self._shsh_blob.exists() or recreate_ramdisk:
             logger.info('creating ramdisk')
@@ -134,7 +138,7 @@ class Pylera1n:
         self.pwn()
 
         if not self.has_prepared_boot or recreate_boot:
-            self.create_patched_boot()
+            self.create_patched_boot(kernel_patches=kernel_patches)
 
         self._boot_boot()
 
@@ -183,10 +187,10 @@ class Pylera1n:
             sock = device.connect(SSH_PORT)
 
         with SSHClient(sock) as ssh:
+            self._dump_blobs(ssh)
             self._install_pogo(ssh)
             if self._devel:
                 self._disable_nvram_stuff(ssh)
-            self._dump_blobs(ssh)
 
             # make sure device reboots into recovery
             ssh.exec('/usr/sbin/nvram auto-boot=false')
@@ -308,7 +312,7 @@ class Pylera1n:
                     img4 = IMG4(im4p=im4p_file.read_bytes(), im4m=im4m)
                     img4_file.write_bytes(img4.output())
 
-    def create_patched_boot(self) -> None:
+    def create_patched_boot(self, kernel_patches: Path = None) -> None:
         logger.info('creating patched boot')
 
         if self._ipsw is None:
@@ -371,7 +375,8 @@ class Pylera1n:
 
                     im4p = IM4P(kernelcache_buf)
                     im4p.payload.decompress()
-                    kcache_raw_file.write_bytes(im4p.payload.output().data)
+                    kcache_raw = im4p.payload.output().data
+                    kcache_raw_file.write_bytes(kcache_raw)
 
                     if not self._devel:
                         if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
@@ -383,9 +388,13 @@ class Pylera1n:
                         img4 = IMG4(im4p=im4p, im4m=im4m)
                         img4_file.write_bytes(img4.output())
                     else:
-                        self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
+                        if kernel_patches is not None:
+                            kcache_patched = self.patch(kcache_raw, kernel_patches.read_text())
+                        else:
+                            self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
+                            kcache_patched = kcache_patched_file.read_bytes()
 
-                        im4p = IM4P(fourcc=fourcc, payload=kcache_patched_file.read_bytes())
+                        im4p = IM4P(fourcc=fourcc, payload=kcache_patched)
                         im4p.payload.compress(Compression.LZSS)
 
                         if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
@@ -523,6 +532,27 @@ class Pylera1n:
         else:
             self._iboot64patcher(iboot, output, '-b', boot_args)
 
+    @staticmethod
+    def patch(buf: bytes, patches: str) -> bytes:
+        patched = buf
+
+        for line in patches.splitlines():
+            print('line', line)
+            if ':' not in line:
+                continue
+
+            line = line.strip()
+
+            offset, patch = line.split(':', 1)
+            offset = int(offset, 16)
+
+            ks = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
+            encoding, count = ks.asm(patch)
+            encoding = bytes(encoding)
+            patched = patched[:offset] + encoding + patched[offset + len(encoding):]
+
+        return patched
+
     def patch_kernelcache(self, kernelcache: Path, output: Path, flag_o=False) -> None:
         args = [kernelcache, output, '-a']
         if flag_o:
@@ -540,13 +570,13 @@ class Pylera1n:
     def enter_dfu(self) -> None:
         while not self.in_dfu:
             print('Prepare to do the following to start enter DFU mode:')
-            print(' - Hold VolDown+Power for 6 seconds')
+            print(' - Hold VolDown+Power for 5 seconds')
             print(' - Keep holding VolDown for up to 10 seconds')
             input('HIT RETURN TO START> ')
             self.reboot()
 
-            print('[1] Hold VolDown+Power for 6 seconds')
-            wait(6)
+            print('[1] Hold VolDown+Power for 5 seconds')
+            wait(5)
             print('[2] Keep holding VolDown for up to 10 seconds')
             for _ in trange(10):
                 try:
