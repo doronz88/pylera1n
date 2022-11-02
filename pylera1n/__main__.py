@@ -80,9 +80,9 @@ def ramdisk(version: str, palera1n: str, ramdisk_ipsw: str, recreate_ramdisk: bo
 @click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
 @click.option('--devel', is_flag=True, help='Try using developement build instead of original')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
-def ramdisk_stage(version: str, palera1n: str, ramdisk_ipsw: str, rootless: bool, recreate_ramdisk: bool):
+def ramdisk_stage(version: str, palera1n: str, ramdisk_ipsw: str, devel: bool, recreate_ramdisk: bool):
     """ create blobs, install pogo and patch nvram if on non-rootless """
-    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw, devel=rootless)
+    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw, devel=devel)
     logger.info(exploit)
     exploit.ramdisk_stage(recreate_ramdisk=recreate_ramdisk)
 
