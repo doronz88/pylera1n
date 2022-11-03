@@ -124,10 +124,14 @@ class Pylera1n:
             with IRecv(timeout=1) as irecv:
                 return irecv.mode == Mode.DFU_MODE
 
-    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, kernel_patches: Path = None) -> None:
+    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, kernel_patches: Path = None,
+                  iboot_patches: Path = None) -> None:
         logger.info('jailbreaking')
 
         if kernel_patches is not None:
+            recreate_boot = True
+
+        if iboot_patches is not None:
             recreate_boot = True
 
         if not self._shsh_blob.exists() or recreate_ramdisk:
@@ -138,7 +142,7 @@ class Pylera1n:
         self.pwn()
 
         if not self.has_prepared_boot or recreate_boot:
-            self.create_patched_boot(kernel_patches=kernel_patches)
+            self.create_patched_boot(kernel_patches=kernel_patches, iboot_patches=iboot_patches)
 
         self._boot_boot()
 
@@ -146,7 +150,6 @@ class Pylera1n:
         """ boot into ramdisk """
         logger.info('waiting for device to enter DFU')
         self.enter_dfu()
-        logger.info('pwn-ing device')
         self.pwn()
 
         if not self.has_prepared_ramdisk or recreate_ramdisk:
@@ -167,7 +170,7 @@ class Pylera1n:
                 return False
         return True
 
-    def ramdisk_stage(self, recreate_ramdisk=False) -> None:
+    def ramdisk_stage(self, recreate_ramdisk=False, install_pogo=True) -> None:
         """ create blobs, install pogo and patch nvram if on non-rootless """
         self.boot_ramdisk(recreate_ramdisk)
 
@@ -188,7 +191,8 @@ class Pylera1n:
 
         with SSHClient(sock) as ssh:
             self._dump_blobs(ssh)
-            self._install_pogo(ssh)
+            if install_pogo:
+                self._install_pogo(ssh)
             if self._devel:
                 self._disable_nvram_stuff(ssh)
 
@@ -312,7 +316,7 @@ class Pylera1n:
                     img4 = IMG4(im4p=im4p_file.read_bytes(), im4m=im4m)
                     img4_file.write_bytes(img4.output())
 
-    def create_patched_boot(self, kernel_patches: Path = None) -> None:
+    def create_patched_boot(self, kernel_patches: Path = None, iboot_patches: Path = None) -> None:
         logger.info('creating patched boot')
 
         if self._ipsw is None:
@@ -353,13 +357,19 @@ class Pylera1n:
 
                 if component in ('iBSS', 'iBEC'):
                     iboot = local_component
-                    iboot_dec = iboot.with_suffix('.dec')
+                    iboot_dec_file = iboot.with_suffix('.dec')
                     patched_iboot_file = iboot.with_suffix('.patched')
                     boot_args = None
-                    self.decrypt(iboot, iboot_dec)
+                    self.decrypt(iboot, iboot_dec_file)
+
                     if component == 'iBEC':
                         boot_args = '-v keepsyms=1 debug=0x2014e panic-wait-forever=1'
-                    self.patch_iboot_component(iboot_dec, patched_iboot_file, boot_args)
+
+                    if iboot_patches is not None:
+                        patched_iboot_file.write_bytes(
+                            self.patch(iboot_dec_file.read_bytes(), iboot_patches.read_text()))
+                    else:
+                        self.patch_iboot_component(iboot_dec_file, patched_iboot_file, boot_args)
 
                     fourcc = component.lower()
                     im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc=fourcc)
@@ -435,10 +445,15 @@ class Pylera1n:
                 irecv.send_buffer((self._boot_dir / 'iBEC.img4').read_bytes())
 
                 if self._chip_id in (0x8010, 0x8015, 0x8011, 0x8012):
-                    irecv.send_command('go')
+                    irecv.send_command('go', b_request=1)
+                    irecv.ctrl_transfer(0x21, 1)
         except USBError:
             # device will reboot and cause a broken pipe
             pass
+
+        # waiting for iBoot to load
+        logger.info('waiting for iBoot to load')
+        wait(3)
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
@@ -456,7 +471,7 @@ class Pylera1n:
             logger.info('sending KernelCache')
             irecv.send_buffer((self._boot_dir / 'KernelCache.img4').read_bytes())
             try:
-                irecv.send_command('bootx')
+                irecv.send_command('bootx', b_request=1)
             except USBError:
                 pass
 
@@ -521,6 +536,7 @@ class Pylera1n:
                 irecv.reboot()
 
     def pwn(self) -> None:
+        logger.info('pwn')
         self._gaster('pwn')
 
     def decrypt(self, payload: Path, output: Path) -> None:
@@ -537,7 +553,6 @@ class Pylera1n:
         patched = buf
 
         for line in patches.splitlines():
-            print('line', line)
             if ':' not in line:
                 continue
 
