@@ -107,7 +107,7 @@ class Pylera1n:
         self._ramdisk_dir = self._storage / 'ramdisk' / self._hardware_model
         self._ramdisk_dir.mkdir(exist_ok=True, parents=True)
 
-        self._boot_dir = self._storage / 'boot' / self._hardware_model
+        self._boot_dir = self._storage / 'boot' / self._hardware_model / self._product_version
         self._boot_dir.mkdir(exist_ok=True, parents=True)
 
         self._bpatch_file = self._storage / 'patches' / f'{self._hardware_model.replace("ap", "")}.bpatch'
@@ -399,7 +399,8 @@ class Pylera1n:
                         img4_file.write_bytes(img4.output())
                     else:
                         if kernel_patches is not None:
-                            kcache_patched = self.patch(kcache_raw, kernel_patches.read_text())
+                            # skip FAT header
+                            kcache_patched = self.patch(kcache_raw[0x1c:], kernel_patches.read_text())
                         else:
                             self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
                             kcache_patched = kcache_patched_file.read_bytes()
