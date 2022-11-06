@@ -386,6 +386,7 @@ class Pylera1n:
                     im4p = IM4P(kernelcache_buf)
                     im4p.payload.decompress()
                     kcache_raw = im4p.payload.output().data
+
                     kcache_raw_file.write_bytes(kcache_raw)
 
                     if not self._devel:
@@ -393,14 +394,17 @@ class Pylera1n:
                             kpp_bin.write_bytes(im4p.payload.extra)
 
                     if self._devel:
-                        im4p = IM4P(kcache_patched_file.read_bytes())
+                        im4p = IM4P(kernelcache_buf)
                         im4p.fourcc = fourcc
                         img4 = IMG4(im4p=im4p, im4m=im4m)
                         img4_file.write_bytes(img4.output())
                     else:
                         if kernel_patches is not None:
-                            # skip FAT header
-                            kcache_patched = self.patch(kcache_raw[0x1c:], kernel_patches.read_text())
+                            if kcache_raw.startswith(b'\xca\xfe\xba\xbe'):
+                                # trim FAt image header
+                                kcache_raw = kcache_raw[0x1c:]
+
+                            kcache_patched = self.patch(kcache_raw, kernel_patches.read_text())
                         else:
                             self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
                             kcache_patched = kcache_patched_file.read_bytes()
@@ -523,7 +527,7 @@ class Pylera1n:
             logger.info('sending RestoreKernelCache')
             irecv.send_buffer((self._ramdisk_dir / 'RestoreKernelCache.img4').read_bytes())
             try:
-                irecv.send_command('bootx')
+                irecv.send_command('bootx', b_request=1)
             except USBError:
                 pass
 
@@ -537,7 +541,7 @@ class Pylera1n:
                 irecv.reboot()
 
     def pwn(self) -> None:
-        logger.info('pwn')
+        logger.info('pwn-ing')
         self._gaster('pwn')
 
     def decrypt(self, payload: Path, output: Path) -> None:
@@ -555,6 +559,9 @@ class Pylera1n:
 
         for line in patches.splitlines():
             if ':' not in line:
+                continue
+
+            if line.startswith(';') or line.startswith('#'):
                 continue
 
             line = line.strip()
