@@ -1,0 +1,5 @@
+# patch in_loaded_trust_cache
+0x131ec18: orr w0, wzr, #1; ret
+
+# patch handle_snapshot_mount (could not authenticate personalized root hash!)
+0x1e2ca88: b -0x2fc

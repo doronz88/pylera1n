@@ -32,7 +32,7 @@ if __name__ == '__main__':
         cmdclass={},
         packages=PACKAGES,
         include_package_data=True,
-        package_data={PACKAGE_NAME: ['palera1n/**/*']},
+        package_data={PACKAGE_NAME: ['palera1n/**/*', 'kernel_patches/*.patch']},
         author='DoronZ',
         author_email='doron88@gmail.com',
         license='GNU GENERAL PUBLIC LICENSE - Version 3, 29 June 2007',

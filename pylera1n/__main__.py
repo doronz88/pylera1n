@@ -17,6 +17,8 @@ coloredlogs.install(level=logging.INFO)
 
 logger = logging.getLogger(__name__)
 logging.getLogger('paramiko.transport').disabled = True
+logging.getLogger('pymobiledevice3.irecv').disabled = True
+logging.getLogger('urllib3.connectionpool').disabled = True
 
 PALERA1N_PATH = Path(pylera1n.__file__).parent / 'palera1n'
 

@@ -112,6 +112,9 @@ class Pylera1n:
 
         self._bpatch_file = self._storage / 'patches' / f'{self._hardware_model.replace("ap", "")}.bpatch'
 
+        self._kernel_patch_file = Path(
+            __file__).parent / 'kernel_patches' / f'{self._product_type}-{self._product_version}.patch'
+
     @property
     def in_dfu(self) -> bool:
         try:
@@ -322,6 +325,10 @@ class Pylera1n:
         if self._ipsw is None:
             self._init_ipsw()
 
+        if kernel_patches is None:
+            if self._kernel_patch_file.exists():
+                kernel_patches = self._kernel_patch_file
+
         build_identity = self._ipsw.build_manifest.get_build_identity(self._hardware_model)
 
         self.pwn()
@@ -364,6 +371,7 @@ class Pylera1n:
 
                     if component == 'iBEC':
                         boot_args = '-v keepsyms=1 debug=0x2014e panic-wait-forever=1'
+                        logger.debug(f'adding boot args to iBEC: "{boot_args}"')
 
                     if iboot_patches is not None:
                         patched_iboot_file.write_bytes(
@@ -404,6 +412,7 @@ class Pylera1n:
                                 # trim FAt image header
                                 kcache_raw = kcache_raw[0x1c:]
 
+                            logger.debug(f'using kernel patch file: {kernel_patches}')
                             kcache_patched = self.patch(kcache_raw, kernel_patches.read_text())
                         else:
                             self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)

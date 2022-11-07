@@ -1,0 +1,22 @@
+# make in_static_trust_cache return 1
+#0x12d4a44: orr w0, wzr, #1; ret
+# make in_loaded_trust_cache return 1
+0x12d4a5c: orr w0, wzr, #1; ret
+
+# authenticate_root_hash
+#0x1d4e27c: mov x0, #0; ret
+
+# validate_on_disk_root_hash return 0
+#0x1d4dfa0: mov x0, #0; ret
+
+# make hfs_ValidateHFSPlusVolumeHeader return 0
+#0x25b9378: mov x0, #0; ret
+
+# authapfs_seal_is_broken_full
+#0x1cd30b8: mov x0, #0; ret
+
+# mac_mount_check_snapshot_mount
+#0x8601b0: mov x0, #0; ret
+
+# Disabled snapshot temporarily (com.apple.os.update-)
+#0x5ae8e3: .ascii "abc"
