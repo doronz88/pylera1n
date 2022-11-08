@@ -248,7 +248,6 @@ class Pylera1n:
                 im4p_file = local_component
                 img4_file = (self._storage_ramdisk_dir / component).with_suffix('.img4')
 
-                # patch bootloader
                 if component in ('iBSS', 'iBEC'):
                     iboot = local_component
                     decrypted_iboot = iboot.with_suffix('.dec')
@@ -269,7 +268,6 @@ class Pylera1n:
                     img4 = IMG4(im4p=im4p, im4m=im4m)
                     img4_file.write_bytes(img4.output())
 
-                # patch kernelcache
                 elif component == 'RestoreKernelCache':
                     kcache_raw = temp_dir / 'kcache.raw'
                     kcache_patched = temp_dir / 'kcache.patched'
@@ -283,7 +281,6 @@ class Pylera1n:
                     img4 = IMG4(im4p=im4p, im4m=im4m)
                     img4_file.write_bytes(img4.output())
 
-                # patch RestoreRamDisk
                 elif component == 'RestoreRamDisk':
                     dmg = temp_dir / 'ramdisk.dmg'
                     im4p_file = IM4P(local_component.read_bytes())
