@@ -9,3 +9,4 @@ plumbum
 pyipsw
 remotezip
 tqdm
+keystone-engine
