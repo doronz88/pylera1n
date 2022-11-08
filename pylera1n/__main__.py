@@ -1,17 +1,13 @@
 import logging
-import traceback
 from pathlib import Path
 
 import click
 import coloredlogs
-from paramiko.config import SSH_PORT
-from pymobiledevice3 import usbmux
 from pymobiledevice3.exceptions import IRecvNoDeviceConnectedError
 
 import pylera1n
 from pylera1n.exceptions import MissingProductVersionError
-from pylera1n.pylera1n import Pylera1n
-from pylera1n.sshclient import SSHClient
+from pylera1n.pylera1n import Pylera1n, wait_device_ssh
 
 coloredlogs.install(level=logging.INFO)
 
@@ -44,11 +40,8 @@ def cli():
 
 @cli.command(cls=Command)
 def ssh():
-    """ connect via ssh """
-    device = usbmux.select_device()
-    assert device
-
-    with SSHClient(device.connect(SSH_PORT)) as ssh:
+    """ Connect via ssh """
+    with wait_device_ssh() as ssh:
         ssh.interact()
 
 
@@ -56,71 +49,62 @@ def ssh():
 @click.argument('source', type=click.Path(file_okay=True, dir_okay=False, exists=True))
 @click.argument('destination')
 def put_file(source, destination):
-    """ put file over ssh """
-    device = usbmux.select_device()
-    assert device
-
-    with SSHClient(device.connect(SSH_PORT)) as ssh:
+    """ Put file over ssh """
+    with wait_device_ssh() as ssh:
         ssh.put_file(source, destination)
 
 
 @cli.command(cls=Command)
 @click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
-@click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
-              help='Path to paler1n repo')
-@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
+@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
-def ramdisk(version: str, palera1n: str, ramdisk_ipsw: str, recreate_ramdisk: bool):
-    """ boot into ramdisk """
-    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw)
-    logger.info(exploit)
-    exploit.boot_ramdisk(recreate_ramdisk=recreate_ramdisk)
+def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool):
+    """ Boot into ramdisk """
+    Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw).boot_ramdisk(recreate_ramdisk=recreate_ramdisk)
 
 
 @cli.command(cls=Command)
 @click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
-@click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
-              help='Path to paler1n repo')
-@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
-@click.option('--devel', is_flag=True, help='Try using developement build instead of original')
-@click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
-@click.option('--install-pogo/--no-install-pogo', default=True, help='Should install Pogo')
-def ramdisk_stage(version: str, palera1n: str, ramdisk_ipsw: str, devel: bool, recreate_ramdisk: bool,
-                  install_pogo: bool):
-    """ create blobs, install pogo and patch nvram if on non-rootless """
-    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw, devel=devel)
-    logger.info(exploit)
-    exploit.ramdisk_stage(recreate_ramdisk=recreate_ramdisk, install_pogo=install_pogo)
+@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
+@click.option('--dump-blobs', is_flag=True, default=False, help='Dump blobs')
+@click.option('--install-pogo', is_flag=True, default=False, help='Install Pogo')
+@click.option('--enable-development-kernel-features', is_flag=True, default=False,
+              help='Write nvram development features')
+@click.option('--auto-boot', is_flag=True, default=False, help='NVRAM auto-boot value')
+@click.option('--reboot', is_flag=True, default=False, help='Reboot on connection close')
+def ramdisk_ssh_operations(version: str, ramdisk_ipsw: str, devel: bool, dump_blobs: bool, install_pogo: bool,
+                           enable_development_kernel_features: bool, auto_boot: bool, reboot: bool):
+    """ Perform SSH Ramdisk operations """
+    Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw, devel=devel).perform_ramdisk_ssh_operations(
+        dump_blobs=dump_blobs, install_pogo=install_pogo,
+        enable_development_kernel_features=enable_development_kernel_features,
+        auto_boot=auto_boot, reboot=reboot)
 
 
 @cli.command(cls=Command)
 @click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
-@click.option('--palera1n', type=click.Path(dir_okay=True, file_okay=False, exists=True), default=PALERA1N_PATH,
-              help='Path to paler1n repo')
-@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='14.8 IPSW')
+@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
 @click.option('--ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='Device correct IPSW')
-@click.option('--devel', is_flag=True, help='Try using developement build instead of original')
+@click.option('--devel', is_flag=True, help='Try using development build instead of original')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
 @click.option('--recreate-boot', is_flag=True, help='Recreate boot if already exists')
 @click.option('--kernel-patches', type=click.Path(dir_okay=False, file_okay=True, exists=True),
               help='Use costume patch file')
 @click.option('--iboot-patches', type=click.Path(dir_okay=False, file_okay=True, exists=True),
               help='Use costume patch file')
-def jailbreak(version: str, palera1n: str, ramdisk_ipsw: str, ipsw: str, devel: bool, recreate_ramdisk: bool,
-              recreate_boot: bool, kernel_patches: str, iboot_patches: str):
-    """ perform full jailbreak """
+@click.option('--install-pogo', default=False, is_flag=True, help='Install Pogo')
+def jailbreak(version: str, ramdisk_ipsw: str, ipsw: str, devel: bool, recreate_ramdisk: bool,
+              recreate_boot: bool, kernel_patches: str, iboot_patches: str, install_pogo: bool):
+    """ Perform full jailbreak """
     if kernel_patches is not None:
         kernel_patches = Path(kernel_patches)
 
     if iboot_patches is not None:
         iboot_patches = Path(iboot_patches)
 
-    exploit = Pylera1n(Path(palera1n), product_version=version, ramdisk_ipsw=ramdisk_ipsw, ipsw=ipsw, devel=devel)
-    try:
-        exploit.jailbreak(recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot, kernel_patches=kernel_patches,
-                          iboot_patches=iboot_patches)
-    except Exception:
-        traceback.print_exc()
+    Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw, ipsw=ipsw, devel=devel).jailbreak(
+        recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot, kernel_patches=kernel_patches,
+        iboot_patches=iboot_patches, install_pogo=install_pogo)
 
 
 if __name__ == '__main__':

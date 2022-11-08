@@ -1,15 +1,19 @@
-# make in_static_trust_cache return 1
+# in_static_trust_cache
 #0x12d4a44: orr w0, wzr, #1; ret
-# make in_loaded_trust_cache return 1
+
+# in_loaded_trust_cache
 0x12d4a5c: orr w0, wzr, #1; ret
 
 # authenticate_root_hash
-#0x1d4e27c: mov x0, #0; ret
+0x1d4e27c: mov x0, #0; ret
 
 # validate_on_disk_root_hash return 0
-#0x1d4dfa0: mov x0, #0; ret
+0x1d4dfa0: mov x0, #0; ret
 
-# make hfs_ValidateHFSPlusVolumeHeader return 0
+# apfs_extract_root_hash_arm
+#0x1ce79d0: mov x0, #0; ret
+
+# hfs_ValidateHFSPlusVolumeHeader
 #0x25b9378: mov x0, #0; ret
 
 # authapfs_seal_is_broken_full
