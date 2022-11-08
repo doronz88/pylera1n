@@ -3,6 +3,7 @@ import logging
 import os
 import plistlib
 import shutil
+import tarfile
 import tempfile
 import time
 from io import BytesIO
@@ -16,6 +17,8 @@ from paramiko.config import SSH_PORT
 from plumbum import local
 from pyimg4 import IM4P, Compression, IMG4
 from pyipsw.pyipsw import get_devices
+from pylera1n.exceptions import MissingProductVersionError
+from pylera1n.sshclient import SSHClient
 from pymobiledevice3 import usbmux
 from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError, ConnectionFailedError
 from pymobiledevice3.irecv import IRecv, Mode
@@ -24,9 +27,6 @@ from pymobiledevice3.restore.ipsw.ipsw import IPSW
 from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
-
-from pylera1n.exceptions import MissingProductVersionError
-from pylera1n.sshclient import SSHClient
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,6 @@ class Pylera1n:
         self._gaster = local[str(gaster_path)]
         self._iboot64patcher = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcher')]
         self._kernel64patcher = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')]
-        self._gtar = local[str(PALERA1N_PATH / 'ramdisk' / OS_VARIANT / 'gtar')]
         self._hdiutil = None if os.uname().sysname != 'Darwin' else local['hdiutil']
         self._ramdisk_ipsw_path = ramdisk_ipsw
         self._ramdisk_ipsw: Optional[IPSW] = None
@@ -227,8 +226,8 @@ class Pylera1n:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            with open(PALERA1N_PATH / 'ramdisk' / 'shsh' / f'0x{self._chip_id:x}.shsh', 'rb') as f:
-                im4m = plistlib.load(f)['ApImg4Ticket']
+            with open(PALERA1N_PATH / 'ramdisk' / 'shsh' / f'0x{self._chip_id:x}.shsh', 'rb') as costum_ramdisk:
+                im4m = plistlib.load(costum_ramdisk)['ApImg4Ticket']
 
             build_identity = self._ramdisk_ipsw.build_manifest.get_build_identity(self._hardware_model)
 
@@ -298,9 +297,9 @@ class Pylera1n:
                     mountpoint = temp_dir / 'sshrd'
                     mountpoint.mkdir(exist_ok=True, parents=True)
                     self._hdiutil('attach', '-mountpoint', mountpoint, dmg)
-                    self._gtar('-x', '--no-overwrite-dir', '-f', PALERA1N_PATH / 'ramdisk' / 'other' / 'ramdisk.tar.gz',
-                               '-C',
-                               mountpoint)
+
+                    with tarfile.open(PALERA1N_PATH / 'ramdisk' / 'other' / 'ramdisk.tar.gz') as costum_ramdisk:
+                        costum_ramdisk.extractall(mountpoint)
 
                     logger.info('extracting Pogo.app/* contents into /usr/local/bin/loader.app/*')
                     local_app = temp_dir / 'Pogo'
