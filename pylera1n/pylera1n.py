@@ -291,7 +291,6 @@ class Pylera1n:
 
                     if self._hdiutil is None:
                         raise NotImplementedError('missing hdiutil')
-
                     self._hdiutil('resize', '-size', '256MB', dmg)
 
                     mountpoint = temp_dir / 'sshrd'
@@ -651,7 +650,10 @@ class Pylera1n:
         if self._ramdisk_ipsw_path is None:
             devices = list(get_devices(f"'{self._product_type}' == device and '15.6' == version"))
             assert len(devices) == 1
-            self._ramdisk_ipsw = IPSW(RemoteZip(devices[0]['url']))
+            url = devices[0]['url']
+
+            logger.info(f'using remote ipsw: {url}')
+            self._ramdisk_ipsw = IPSW(RemoteZip(url))
         else:
             self._ramdisk_ipsw = IPSW(ZipFile(self._ramdisk_ipsw_path))
 
