@@ -24,11 +24,10 @@ Options:
   --help  Show this message and exit.
 
 Commands:
-  jailbreak               Perform full jailbreak
-  put-file                Put file over ssh
-  ramdisk                 Boot into ramdisk
-  ramdisk-ssh-operations  Perform SSH Ramdisk operations
-  ssh                     Connect via ssh
+  jailbreak  Perform full jailbreak
+  put-file   Put file over ssh
+  ramdisk    Boot into ramdisk
+  ssh        Connect via ssh
 ```
 
 ### Full jailbreak

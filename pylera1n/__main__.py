@@ -58,26 +58,20 @@ def put_file(source, destination):
 @click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
 @click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
-def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool):
-    """ Boot into ramdisk """
-    Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw).boot_ramdisk(recreate_ramdisk=recreate_ramdisk)
-
-
-@cli.command(cls=Command)
-@click.option('-v', '--version', help='iOS version. Can be queried automatically when device is in Normal mode')
-@click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
 @click.option('--dump-blobs', is_flag=True, default=False, help='Dump blobs')
 @click.option('--install-pogo', is_flag=True, default=False, help='Install Pogo')
-@click.option('--enable-development-kernel-features', is_flag=True, default=False,
+@click.option('--enable-development-options', is_flag=True, default=False,
               help='Write nvram development features')
 @click.option('--auto-boot', is_flag=True, default=False, help='NVRAM auto-boot value')
 @click.option('--reboot', is_flag=True, default=False, help='Reboot on connection close')
-def ramdisk_ssh_operations(version: str, ramdisk_ipsw: str, devel: bool, dump_blobs: bool, install_pogo: bool,
-                           enable_development_kernel_features: bool, auto_boot: bool, reboot: bool):
-    """ Perform SSH Ramdisk operations """
-    Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw, devel=devel).perform_ramdisk_ssh_operations(
+def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool, dump_blobs: bool, install_pogo: bool,
+            enable_development_options: bool, auto_boot: bool, reboot: bool):
+    """ Boot into ramdisk """
+    exploit = Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw)
+    exploit.boot_ramdisk(recreate_ramdisk=recreate_ramdisk)
+    exploit.perform_ramdisk_ssh_operations(
         dump_blobs=dump_blobs, install_pogo=install_pogo,
-        enable_development_kernel_features=enable_development_kernel_features,
+        enable_development_options=enable_development_options,
         auto_boot=auto_boot, reboot=reboot)
 
 

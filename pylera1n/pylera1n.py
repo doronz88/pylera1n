@@ -1,6 +1,7 @@
 import contextlib
 import logging
 import os
+import plistlib
 import shutil
 import tempfile
 import time
@@ -104,7 +105,6 @@ class Pylera1n:
         self._product_type = None
         self._product_version = product_version
         self._gaster = local[str(gaster_path)]
-        self._img4tool = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'img4tool')]
         self._iboot64patcher = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcher')]
         self._kernel64patcher = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')]
         self._gtar = local[str(PALERA1N_PATH / 'ramdisk' / OS_VARIANT / 'gtar')]
@@ -159,7 +159,7 @@ class Pylera1n:
             logger.info('creating ramdisk')
             self.boot_ramdisk(recreate_ramdisk)
             self.perform_ramdisk_ssh_operations(dump_blobs=True, install_pogo=install_pogo,
-                                                enable_development_kernel_features=self._devel is True, reboot=True)
+                                                enable_development_options=self._devel is True, reboot=True)
 
         self.enter_dfu()
         self.pwn()
@@ -194,7 +194,7 @@ class Pylera1n:
         return True
 
     def perform_ramdisk_ssh_operations(self, dump_blobs=False, install_pogo=False,
-                                       enable_development_kernel_features=False, auto_boot=False,
+                                       enable_development_options=False, auto_boot=False,
                                        reboot=False) -> None:
         """ create blobs, install pogo and patch nvram if on non-rootless """
         with wait_device_ssh() as ssh:
@@ -204,8 +204,8 @@ class Pylera1n:
             if install_pogo:
                 self._install_pogo(ssh)
 
-            if enable_development_kernel_features:
-                self._disable_nvram_stuff(ssh)
+            if enable_development_options:
+                self._enable_development_options(ssh)
 
             ssh.exec(f'/usr/sbin/nvram auto-boot={str(auto_boot).lower()}')
 
@@ -227,15 +227,14 @@ class Pylera1n:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            im4m_file = temp_dir / 'IM4M'
-            self._img4tool('-e', '-s', PALERA1N_PATH / 'ramdisk' / 'shsh' / f'0x{self._chip_id:x}.shsh', '-m',
-                           im4m_file)
+            with open(PALERA1N_PATH / 'ramdisk' / 'shsh' / f'0x{self._chip_id:x}.shsh', 'rb') as f:
+                im4m = plistlib.load(f)['ApImg4Ticket']
+
             build_identity = self._ramdisk_ipsw.build_manifest.get_build_identity(self._hardware_model)
 
             logger.info('patching RestoreLogo')
             img4_file = self._storage_ramdisk_dir / 'RestoreLogo.img4'
             im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-            im4m = im4m_file.read_bytes()
             im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
             img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=im4m).output())
 
@@ -347,14 +346,12 @@ class Pylera1n:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            im4m_file = temp_dir / 'IM4M'
-            self._img4tool('-e', '-s', self._storage_shsh_blob, '-m', im4m_file)
+            im4m = self._storage_shsh_blob.read_bytes()
 
             # use costume RestoreLogo
             logger.info('patching RestoreLogo')
             img4_file = self._storage_boot_dir / 'RestoreLogo.img4'
             im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-            im4m = im4m_file.read_bytes()
             im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
             img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=im4m).output())
 
@@ -669,6 +666,8 @@ class Pylera1n:
 
     @staticmethod
     def _install_pogo(ssh: SSHClient) -> None:
+        logger.info('installing Pogo')
+
         logger.info('mounting filesystems')
         ssh.exec('/usr/bin/mount_filesystems')
 
@@ -694,7 +693,8 @@ class Pylera1n:
         ssh.exec(f'/usr/sbin/chown 0 {tips_dir}/PogoHelper')
 
     @staticmethod
-    def _disable_nvram_stuff(ssh: SSHClient) -> None:
+    def _enable_development_options(ssh: SSHClient) -> None:
+        logger.info('enabling development options')
         ssh.exec('/usr/sbin/nvram boot-args="-v keepsyms=1 debug=0x2014e launchd_unsecure_cache=1 '
                  'launchd_missing_exec_no_panic=1 amfi=0xff amfi_allow_any_signature=1 '
                  'amfi_get_out_of_my_way=1 amfi_allow_research=1 '
@@ -704,12 +704,8 @@ class Pylera1n:
                  'panic-wait-forever=1 -panic_notify cs_debug=1 PE_i_can_has_debugger=1"')
         ssh.exec('/usr/sbin/nvram allow-root-hash-mismatch=1')
         ssh.exec('/usr/sbin/nvram root-live-fs=1')
-        ssh.exec('/usr/sbin/nvram auto-boot=false')
 
     def _dump_blobs(self, ssh: SSHClient) -> None:
+        logger.info(f'saving blobs into: {self._storage_shsh_blob}')
         stdin, stdout, stderr = ssh.exec('cat /dev/rdisk1')
-        with tempfile.NamedTemporaryFile('wb', delete=False) as f:
-            f.write(stdout.read())
-            dump_file = Path(f.name)
-        self._img4tool('--convert', '-s', self._storage_shsh_blob, dump_file)
-        dump_file.unlink()
+        self._storage_shsh_blob.write_bytes(IMG4(stdout.read()).im4m.output())
