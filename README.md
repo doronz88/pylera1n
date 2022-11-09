@@ -59,6 +59,18 @@ ls /mnt2
 
 ## Research Notes
 
+### Tips and Tricks
+
+Use the following snippet to stop the annoying Finder pop-ups when device is in Recovery:
+
+```shell
+defaults write -g ignore-devices -bool false
+defaults write com.apple.AMPDevicesAgent dontAutomaticallySyncIPods -bool false
+killall Finder
+```
+
+### Disk layout
+
 On iPhone X use the following disk map:
 
 - `disk0s1s1` - `/`
