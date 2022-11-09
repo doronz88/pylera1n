@@ -38,7 +38,7 @@ Commands:
     ```
 - Open `Tips` application.
 - Click the `Install` button
-- Click the `Tools` button
+- Click the `Do All` button
 - Execute the Launch Daemons to start [`rpcserver`](https://github.com/doronz88/rpc-project)
 
 ### Modifying `/private`

@@ -1,5 +1,33 @@
-# patch in_loaded_trust_cache
-0x131ec18: orr w0, wzr, #1; ret
-
 # patch handle_snapshot_mount (could not authenticate personalized root hash!)
+# FFFFFFF008E30A88 LDR X8, [X9,#qword_FFFFFFF009790A48@PAGEOFF]
 0x1e2ca88: b -0x2fc
+
+# patch FFFFFFF008328BB8 bl proc_has_get_task_allow
+0x1324bb8: movz w0, #0x1
+
+# patch lookup_in_static_trust_cache
+# FFFFFFF007CDA428 lookup_in_static_trust_cache
+0xcd6428: movz x0, #0x1; ret
+
+# patch task_for_pid
+# allow pid == 0
+# FFFFFFF008081364 CBZ W23, loc_FFFFFFF0080813F0
+0x107d364: nop
+
+# patch convert_port_to_map_common
+# FFFFFFF007BA6DCC CBZ W21, loc_FFFFFFF007BA6E08
+0xba2dcc: nop
+
+# patch vm_fault_enter
+# FFFFFFF007C41F5C TBZ W8, #3, loc_FFFFFFF007C41F70
+0xc3df5c: nop
+
+# -- not mandatory for rpcserver and debugserver
+
+# patch _csproc_get_platform_binary
+# FFFFFFF007FBB878 _csproc_get_platform_binary
+0xfb7878: movz w0, #0x1; ret
+
+# patch _csfg_get_platform_binary
+# FFFFFFF007FBB9BC _csfg_get_platform_binary
+0xfb79bc: movz w0, #0x1; ret
