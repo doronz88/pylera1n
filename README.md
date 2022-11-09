@@ -63,4 +63,4 @@ On iPhone X use the following disk map:
 
 - `disk0s1s1` - `/`
 - `disk0s1s2` - `/private` (SEP Protected)
-- `disk0s1s7` - `/private/var/preboot`
+- `disk0s1s6` - `/private/var/preboot`
