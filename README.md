@@ -32,9 +32,14 @@ Commands:
 
 ### Full jailbreak
 
-```shell
-python3 -m pylera1n jailbreak
-```
+- Execute from shell:
+    ```shell
+    python3 -m pylera1n jailbreak
+    ```
+- Open `Tips` application.
+- Click the `Install` button
+- Click the `Tools` button
+- Execute the Launch Daemons to start [`rpcserver`](https://github.com/doronz88/rpc-project)
 
 ### Modifying `/private`
 
@@ -51,3 +56,11 @@ python3 -m pylera1n ssh
 # now you can access /private from /mnt2
 ls /mnt2
 ```
+
+## Research Notes
+
+On iPhone X use the following disk map:
+
+- `disk0s1s1` - `/`
+- `disk0s1s2` - `/private` (SEP Protected)
+- `disk0s1s7` - `/private/var/preboot`

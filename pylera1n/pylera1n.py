@@ -14,6 +14,7 @@ from zipfile import ZipFile
 import requests
 from keystone import Ks, KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN
 from paramiko.config import SSH_PORT
+from paramiko.ssh_exception import SSHException
 from plumbum import local
 from pyimg4 import IM4P, Compression, IMG4
 from pyipsw.pyipsw import get_devices
@@ -52,7 +53,7 @@ def download_gaster(output: Path, os_version: str = os.uname().sysname):
 
 def download_pogo(output: Path) -> None:
     logger.info('downloading pogo')
-    pogo = requests.get('https://nightly.link/elihwyma/Pogo/workflows/build/root/Pogo.zip').content
+    pogo = requests.get('https://nightly.link/doronz88/Pogo/workflows/build/master/Pogo.zip').content
     pogo = ZipFile(BytesIO(pogo))
     with pogo.open('Pogo.ipa') as f:
         output.write_bytes(f.read())
@@ -75,8 +76,18 @@ def wait_device_ssh() -> Generator[SSHClient, None, None]:
         # wait for ssh server to start
         sock = device.connect(SSH_PORT)
 
-    with SSHClient(sock) as ssh:
-        yield ssh
+    client = None
+
+    while client is None:
+        try:
+            client = SSHClient(sock)
+        except SSHException:
+            pass
+
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 RESTORE_COMPONENTS = ('iBSS', 'iBEC', 'RestoreDeviceTree', 'RestoreRamDisk', 'RestoreTrustCache',

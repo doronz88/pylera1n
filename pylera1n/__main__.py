@@ -3,11 +3,10 @@ from pathlib import Path
 
 import click
 import coloredlogs
-from pymobiledevice3.exceptions import IRecvNoDeviceConnectedError
-
 import pylera1n
 from pylera1n.exceptions import MissingProductVersionError
 from pylera1n.pylera1n import Pylera1n, wait_device_ssh
+from pymobiledevice3.exceptions import IRecvNoDeviceConnectedError
 
 coloredlogs.install(level=logging.INFO)
 
@@ -15,6 +14,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('paramiko.transport').disabled = True
 logging.getLogger('pymobiledevice3.irecv').disabled = True
 logging.getLogger('urllib3.connectionpool').disabled = True
+logging.getLogger('paramiko.transport.sftp').disabled = True
 
 PALERA1N_PATH = Path(pylera1n.__file__).parent / 'palera1n'
 
