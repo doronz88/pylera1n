@@ -10,3 +10,4 @@ pyipsw
 remotezip
 tqdm
 keystone-engine
+IPython

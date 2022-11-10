@@ -1,12 +1,14 @@
 import logging
 from pathlib import Path
 
+import IPython
 import click
 import coloredlogs
+from pymobiledevice3.exceptions import IRecvNoDeviceConnectedError
+
 import pylera1n
 from pylera1n.exceptions import MissingProductVersionError
 from pylera1n.pylera1n import Pylera1n, wait_device_ssh
-from pymobiledevice3.exceptions import IRecvNoDeviceConnectedError
 
 coloredlogs.install(level=logging.INFO)
 
@@ -39,10 +41,14 @@ def cli():
 
 
 @cli.command(cls=Command)
-def ssh():
+@click.option('--ipython', is_flag=True)
+def ssh(ipython: bool):
     """ Connect via ssh """
     with wait_device_ssh() as ssh:
-        ssh.interact()
+        if ipython:
+            IPython.embed()
+        else:
+            ssh.interact()
 
 
 @cli.command(cls=Command)
