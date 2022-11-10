@@ -1,37 +1,29 @@
 # patch handle_snapshot_mount (could not authenticate personalized root hash!)
-# FFFFFFF008E30A88 LDR X8, [X9,#qword_FFFFFFF009790A48@PAGEOFF]
-0x1e2ca88: b -0x2fc
+FFFFFFF008E30A88: b -0x2fc
 
-# patch FFFFFFF008328BB8 bl proc_has_get_task_allow
-0x1324bb8: movz w0, #0x1
+# patch proc_has_get_task_allow
+FFFFFFF008328BB8: movz w0, #0x1
 
 # patch lookup_in_static_trust_cache
-# FFFFFFF007CDA428 lookup_in_static_trust_cache
-0xcd6428: movz x0, #0x1; ret
+FFFFFFF007CDA428: movz x0, #0x1; ret
 
 # patch task_for_pid
 # allow pid == 0
-# FFFFFFF008081364 CBZ W23, loc_FFFFFFF0080813F0
-0x107d364: nop
+FFFFFFF008081364: nop
 
 # patch convert_port_to_map_common
-# FFFFFFF007BA6DCC CBZ W21, loc_FFFFFFF007BA6E08
-0xba2dcc: nop
+FFFFFFF007BA6DCC: nop
 
 # patch vm_fault_enter
-# FFFFFFF007C41F5C TBZ W8, #3, loc_FFFFFFF007C41F70
-0xc3df5c: nop
+FFFFFFF007C41F5C: nop
 
 # patch conversion_callback
-# FFFFFFF007BA6F64 CMP             X0, X21
-# 0xba2f64: cmp xzr, xzr
+# FFFFFFF007BA6F64: cmp xzr, xzr
 
 # -- not mandatory for rpcserver and debugserver
 
 # patch _csproc_get_platform_binary
-# FFFFFFF007FBB878 _csproc_get_platform_binary
-0xfb7878: movz w0, #0x1; ret
+FFFFFFF007FBB878: movz w0, #0x1; ret
 
 # patch _csfg_get_platform_binary
-# FFFFFFF007FBB9BC _csfg_get_platform_binary
-0xfb79bc: movz w0, #0x1; ret
+FFFFFFF007FBB9BC: movz w0, #0x1; ret

@@ -8,6 +8,11 @@ accessible and maintainable.
 
 ## Installation
 
+Prequisites:
+
+- Install python3
+- Install [blacktop/ipsw](https://github.com/blacktop/ipsw)
+
 ```shell
 git clone git@github.com:doronz88/pylera1n.git
 cd pylera1n

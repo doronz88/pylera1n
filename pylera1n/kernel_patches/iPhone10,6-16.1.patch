@@ -1,26 +1,23 @@
 # in_static_trust_cache
-#0x12d4a44: orr w0, wzr, #1; ret
+#FFFFFFF005798A44: orr w0, wzr, #1; ret
 
 # in_loaded_trust_cache
-0x12d4a5c: orr w0, wzr, #1; ret
+FFFFFFF005798A5C: orr w0, wzr, #1; ret
 
 # authenticate_root_hash
-0x1d4e27c: mov x0, #0; ret
+FFFFFFF00621227C: mov x0, #0; ret
 
 # validate_on_disk_root_hash return 0
-0x1d4dfa0: mov x0, #0; ret
+FFFFFFF006211FA0: mov x0, #0; ret
 
 # apfs_extract_root_hash_arm
-#0x1ce79d0: mov x0, #0; ret
+#FFFFFFF0061AB9D0: mov x0, #0; ret
 
 # hfs_ValidateHFSPlusVolumeHeader
-#0x25b9378: mov x0, #0; ret
+#FFFFFFF006A7D378: mov x0, #0; ret
 
 # authapfs_seal_is_broken_full
-#0x1cd30b8: mov x0, #0; ret
+#FFFFFFF0061970B8: mov x0, #0; ret
 
 # mac_mount_check_snapshot_mount
-#0x8601b0: mov x0, #0; ret
-
-# Disabled snapshot temporarily (com.apple.os.update-)
-#0x5ae8e3: .ascii "abc"
+#FFFFFFF0078641B0: mov x0, #0; ret

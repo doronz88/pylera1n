@@ -35,6 +35,8 @@ OS_VARIANT = os.uname().sysname
 DEFAULT_STORAGE = Path('~/.pylera1n').expanduser()
 PALERA1N_PATH = Path(__file__).parent / 'palera1n'
 
+blacktop_ipsw = local['ipsw']
+
 
 def wait(seconds: int) -> None:
     for _ in trange(seconds):
@@ -580,6 +582,10 @@ class Pylera1n:
     def patch(buf: bytes, patches: str) -> bytes:
         patched = buf
 
+        with tempfile.NamedTemporaryFile('wb+', delete=False) as f:
+            f.write(buf)
+            file = Path(f.name)
+
         for line in patches.splitlines():
             if ':' not in line:
                 continue
@@ -589,13 +595,16 @@ class Pylera1n:
 
             line = line.strip()
 
-            offset, patch = line.split(':', 1)
-            offset = int(offset, 16)
+            address, patch = line.split(':', 1)
+            retcode, stdout, stderr = blacktop_ipsw['macho', 'a2o', str(file), address].run()
+            offset = int(stderr.split('hex=', 1)[1].split(' ', 1)[0], 16)
 
             ks = Ks(KS_ARCH_ARM64, KS_MODE_LITTLE_ENDIAN)
             encoding, count = ks.asm(patch)
             encoding = bytes(encoding)
             patched = patched[:offset] + encoding + patched[offset + len(encoding):]
+
+        file.unlink()
 
         return patched
 
