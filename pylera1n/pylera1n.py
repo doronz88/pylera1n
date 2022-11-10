@@ -137,7 +137,7 @@ class Pylera1n:
 
         shsh_blob_dir = self._storage / 'shsh'
         shsh_blob_dir.mkdir(exist_ok=True, parents=True)
-        self._storage_shsh_blob = shsh_blob_dir / f'{self._hardware_model}-{self._product_version}.shsh'
+        self._storage_shsh_blob = shsh_blob_dir / f'{self._hardware_model}-{self._product_version}.der'
 
         self._storage_ramdisk_dir = self._storage / 'ramdisk' / self._hardware_model
         self._storage_ramdisk_dir.mkdir(exist_ok=True, parents=True)
@@ -211,7 +211,8 @@ class Pylera1n:
         """ create blobs, install pogo and patch nvram if on non-rootless """
         with wait_device_ssh() as ssh:
             if dump_blobs:
-                ssh.dump_blobs(self._storage_shsh_blob)
+                logger.info(f'saving apticket to: {self._storage_shsh_blob}')
+                self._storage_shsh_blob.write_bytes(ssh.apticket)
 
             if install_pogo:
                 ssh.install_pogo()

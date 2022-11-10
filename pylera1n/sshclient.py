@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import socket
 from pathlib import Path
@@ -8,6 +9,8 @@ from pyimg4 import IMG4
 from pylera1n import interactive
 
 logger = logging.getLogger(__name__)
+
+APTICKET_DEVICE_PATH = Path('/dev/rdisk1')
 
 
 class SSHClient:
@@ -83,10 +86,20 @@ class SSHClient:
         self.exec(f'/bin/chmod 755 {tips_dir}/Tips {tips_dir}/PogoHelper')
         self.exec(f'/usr/sbin/chown 0 {tips_dir}/PogoHelper')
 
-    def dump_blobs(self, path: Path) -> None:
-        logger.info(f'saving blobs into: {path}')
-        stdin, stdout, stderr = self.exec('cat /dev/rdisk1')
-        path.write_bytes(IMG4(stdout.read()).im4m.output())
+    @contextlib.contextmanager
+    def get_active_preboot(self, preboot_device: Path) -> Path:
+        mountpoint = Path(f'/mnt{str(preboot_device)[-1]}')
+        self.mount_apfs(preboot_device, mountpoint)
+        preboot = Path(mountpoint)
+        active_uuid = self.cat(preboot / 'active').strip().decode()
+        try:
+            yield preboot / active_uuid
+        finally:
+            self.umount(mountpoint)
+
+    @property
+    def apticket(self) -> bytes:
+        return IMG4(self.cat(APTICKET_DEVICE_PATH)).im4m.output()
 
     def reboot(self) -> None:
         self.exec('/sbin/reboot')
@@ -97,6 +110,16 @@ class SSHClient:
     def get_nvram_value(self, key: str) -> str:
         stdin, stdout, stderr = self.exec(f'/usr/sbin/nvram {key}')
         return stdout.read().strip()
+
+    def mount_apfs(self, device: Path, mountpoint: Path) -> None:
+        self.exec(f'/sbin/mount_apfs {device} {mountpoint}')
+
+    def umount(self, path: Path) -> None:
+        self.exec(f'/sbin/umount {path}')
+
+    def cat(self, path: Path) -> bytes:
+        stdin, stdout, stderr = self.exec(f'cat {path}')
+        return stdout.read()
 
     def close(self) -> None:
         self._sftp.close()
