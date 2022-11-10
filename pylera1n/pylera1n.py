@@ -211,18 +211,18 @@ class Pylera1n:
         """ create blobs, install pogo and patch nvram if on non-rootless """
         with wait_device_ssh() as ssh:
             if dump_blobs:
-                self._dump_blobs(ssh)
+                ssh.dump_blobs(self._storage_shsh_blob)
 
             if install_pogo:
-                self._install_pogo(ssh)
+                ssh.install_pogo()
 
             if enable_development_options:
-                self._enable_development_options(ssh)
+                ssh.enable_development_options()
 
-            ssh.exec(f'/usr/sbin/nvram auto-boot={str(auto_boot).lower()}')
+            ssh.auto_boot = auto_boot
 
             if reboot:
-                ssh.exec('/sbin/reboot')
+                ssh.reboot()
 
     @staticmethod
     def exec_ssh_command(command: str) -> None:
@@ -681,49 +681,3 @@ class Pylera1n:
             self._ipsw = IPSW(RemoteZip(devices[0]['url']))
         else:
             self._ipsw = IPSW(ZipFile(self._ipsw_path))
-
-    @staticmethod
-    def _install_pogo(ssh: SSHClient) -> None:
-        logger.info('installing Pogo')
-
-        logger.info('mounting filesystems')
-        ssh.exec('/usr/bin/mount_filesystems')
-
-        while True:
-            stdin, stdout, stderr = ssh.exec('/bin/ls /mnt2')
-            if stdout.read().strip():
-                break
-
-        stdin, stdout, stderr = ssh.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app')
-        tips_dir = stdout.read().strip().decode()
-        if not tips_dir:
-            logger.warning(
-                'Tips is not installed. Once your device reboots, install Tips from the App Store and retry')
-            ssh.exec('/sbin/reboot')
-            return
-
-        logger.info(f'copying /usr/local/bin/loader.app/* -> {tips_dir}/*')
-        ssh.exec(f'/bin/cp -rf /usr/local/bin/loader.app/* {tips_dir}')
-
-        logger.info('fixing Tips.app permissions')
-        ssh.exec(f'/usr/sbin/chown 33 {tips_dir}/Tips')
-        ssh.exec(f'/bin/chmod 755 {tips_dir}/Tips {tips_dir}/PogoHelper')
-        ssh.exec(f'/usr/sbin/chown 0 {tips_dir}/PogoHelper')
-
-    @staticmethod
-    def _enable_development_options(ssh: SSHClient) -> None:
-        logger.info('enabling development options')
-        ssh.exec('/usr/sbin/nvram boot-args="-v keepsyms=1 debug=0x2014e launchd_unsecure_cache=1 '
-                 'launchd_missing_exec_no_panic=1 amfi=0xff amfi_allow_any_signature=1 '
-                 'amfi_get_out_of_my_way=1 amfi_allow_research=1 '
-                 'amfi_unrestrict_task_for_pid=1 amfi_unrestricted_local_signing=1 '
-                 'cs_enforcement_disable=1 pmap_cs_allow_modified_code_pages=1 pmap_cs_enforce_coretrust=0 '
-                 'pmap_cs_unrestrict_pmap_cs_disable=1 -unsafe_kernel_text dtrace_dof_mode=1 '
-                 'panic-wait-forever=1 -panic_notify cs_debug=1 PE_i_can_has_debugger=1"')
-        ssh.exec('/usr/sbin/nvram allow-root-hash-mismatch=1')
-        ssh.exec('/usr/sbin/nvram root-live-fs=1')
-
-    def _dump_blobs(self, ssh: SSHClient) -> None:
-        logger.info(f'saving blobs into: {self._storage_shsh_blob}')
-        stdin, stdout, stderr = ssh.exec('cat /dev/rdisk1')
-        self._storage_shsh_blob.write_bytes(IMG4(stdout.read()).im4m.output())
