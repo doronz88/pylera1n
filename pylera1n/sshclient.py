@@ -2,6 +2,7 @@ import contextlib
 import logging
 import socket
 from pathlib import Path
+from typing import List
 
 import paramiko
 from pyimg4 import IMG4
@@ -33,12 +34,25 @@ class SSHClient:
     def interact(self) -> None:
         interactive.interactive_shell(self._ssh.invoke_shell())
 
+    def exec_async(self, command: str) -> tuple:
+        stdin, stdout, stderr = self._ssh.exec_command(command)
+        return stdin, stdout, stderr
+
     def exec(self, command: str) -> tuple:
-        return self._ssh.exec_command(command)
+        stdin, stdout, stderr = self._ssh.exec_command(command)
+        stdout = stdout.read()
+        stderr = stderr.read()
+        return stdout, stderr
 
     def put_file(self, src: str, dest: str) -> None:
+        src = str(src)
+        dest = str(dest)
         self._sftp.put(src, dest)
         self._sftp.chmod(dest, 0o777)
+
+    def listdir(self, path: str) -> List[str]:
+        path = str(path)
+        return self._sftp.listdir(path)
 
     def chmod(self, path: str, mode: int) -> None:
         self._sftp.chmod(path, mode)
@@ -65,13 +79,11 @@ class SSHClient:
         logger.info('mounting filesystems')
         self.mount_filesystems()
 
-        while True:
-            stdin, stdout, stderr = self.exec('/bin/ls /mnt2')
-            if stdout.read().strip():
-                break
+        while len(self.listdir('/mnt2')) == 0:
+            pass
 
-        stdin, stdout, stderr = self.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app')
-        tips_dir = stdout.read().strip().decode()
+        stdout, stderr = self.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app')
+        tips_dir = stdout.strip().decode()
         if not tips_dir:
             logger.warning(
                 'Tips is not installed. Once your device reboots, install Tips from the App Store and retry')
@@ -102,14 +114,14 @@ class SSHClient:
         return IMG4(self.cat(APTICKET_DEVICE_PATH)).im4m.output()
 
     def reboot(self) -> None:
-        self.exec('/sbin/reboot')
+        self.exec_async('/sbin/reboot')
 
     def set_nvram_value(self, key: str, value: str):
         self.exec(f'/usr/sbin/nvram {key}="{value}"')
 
     def get_nvram_value(self, key: str) -> str:
-        stdin, stdout, stderr = self.exec(f'/usr/sbin/nvram {key}')
-        return stdout.read().strip()
+        stdout, stderr = self.exec(f'/usr/sbin/nvram {key}')
+        return stdout.strip()
 
     def mount_apfs(self, device: Path, mountpoint: Path) -> None:
         self.exec(f'/sbin/mount_apfs {device} {mountpoint}')
@@ -118,8 +130,8 @@ class SSHClient:
         self.exec(f'/sbin/umount {path}')
 
     def cat(self, path: Path) -> bytes:
-        stdin, stdout, stderr = self.exec(f'cat {path}')
-        return stdout.read()
+        stdout, stderr = self.exec(f'cat {path}')
+        return stdout
 
     def close(self) -> None:
         self._sftp.close()
