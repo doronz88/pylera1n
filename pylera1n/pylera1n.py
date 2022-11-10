@@ -18,8 +18,6 @@ from paramiko.ssh_exception import SSHException
 from plumbum import local
 from pyimg4 import IM4P, Compression, IMG4
 from pyipsw.pyipsw import get_devices
-from pylera1n.exceptions import MissingProductVersionError
-from pylera1n.sshclient import SSHClient
 from pymobiledevice3 import usbmux
 from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError, ConnectionFailedError
 from pymobiledevice3.irecv import IRecv, Mode
@@ -28,6 +26,9 @@ from pymobiledevice3.restore.ipsw.ipsw import IPSW
 from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
+
+from pylera1n.exceptions import MissingProductVersionError
+from pylera1n.sshclient import SSHClient
 
 logger = logging.getLogger(__name__)
 
@@ -224,12 +225,6 @@ class Pylera1n:
 
             if reboot:
                 ssh.reboot()
-
-    @staticmethod
-    def exec_ssh_command(command: str) -> None:
-        sock = usbmux.select_device().connect(SSH_PORT)
-        with SSHClient(sock) as ssh:
-            ssh.exec(command)
 
     def create_ramdisk(self) -> None:
         if self._ramdisk_ipsw is None:
