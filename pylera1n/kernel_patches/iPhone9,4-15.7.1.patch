@@ -1,0 +1,33 @@
+# patch handle_snapshot_mount (could not authenticate personalized root hash!)
+FFFFFFF006677A1C: b -0xd8
+
+# patch proc_has_get_task_allow
+FFFFFFF005A2F4BC: mov w0, #0x1
+
+# patch lookup_in_static_trust_cache
+FFFFFFF0072E92E8: mov x0, #0x1; ret
+
+# patch task_for_pid
+# allow pid == 0
+FFFFFFF00766B310: nop
+
+# patch convert_port_to_map_common
+FFFFFFF0071D178C: nop
+
+# patch vm_fault_enter
+FFFFFFF0072597A4: nop
+
+# proc_has_get_task_allow
+FFFFFFF005A29DFC: mov x0, #0x1; ret
+
+# amfi_some_task_for_pid_and_get_task_allow
+FFFFFFF005A2F148: mov x0, #0x0; ret
+
+# permit_unrestricted_debugging
+FFFFFFF005A30734: mov x0, #0x1; ret
+
+# patch _csproc_get_platform_binary
+FFFFFFF0075ADA20: mov w0, #0x1; ret
+
+# patch _csfg_get_platform_binary
+FFFFFFF0075ADB54: mov w0, #0x1; ret

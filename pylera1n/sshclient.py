@@ -1,13 +1,16 @@
 import contextlib
 import logging
 import socket
+import tempfile
 from pathlib import Path
 from typing import List
 
 import paramiko
-from pyimg4 import IMG4
+from plumbum import local
+from pyimg4 import IMG4, IM4P, Compression
 
 from pylera1n import interactive
+from pylera1n.common import PALERA1N_PATH, path_to_str, OS_VARIANT
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ class SSHClient:
         self._ssh = paramiko.SSHClient()
         self._ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self._ssh.connect('pylera1n-device', look_for_keys=False, username='root', password='alpine', sock=sock)
+
         self._sftp = self._ssh.open_sftp()
 
     @property
@@ -44,18 +48,37 @@ class SSHClient:
         stderr = stderr.read()
         return stdout, stderr
 
-    def put_file(self, src: str, dest: str) -> None:
-        src = str(src)
-        dest = str(dest)
-        self._sftp.put(src, dest)
-        self._sftp.chmod(dest, 0o777)
+    @path_to_str('src')
+    @path_to_str('dst')
+    def put_file(self, src: str, dst: str) -> None:
+        self._sftp.put(src, dst)
+        self._sftp.chmod(dst, 0o777)
 
+    @path_to_str('src')
+    @path_to_str('dst')
+    def get_file(self, src: str, dst: str) -> None:
+        self._sftp.get(src, dst)
+
+    @path_to_str('path')
+    def remove(self, path: str, force=False) -> None:
+        try:
+            self._sftp.remove(path)
+        except FileNotFoundError:
+            if not force:
+                raise
+
+    @path_to_str('path')
     def listdir(self, path: str) -> List[str]:
         path = str(path)
         return self._sftp.listdir(path)
 
+    @path_to_str('path')
     def chmod(self, path: str, mode: int) -> None:
         self._sftp.chmod(path, mode)
+
+    @path_to_str('path')
+    def chown(self, path: str, owner: int) -> None:
+        self._sftp.chown(path, owner, owner)
 
     def mount_filesystems(self) -> None:
         self.exec('/usr/bin/mount_filesystems')
@@ -98,6 +121,83 @@ class SSHClient:
         self.exec(f'/bin/chmod 755 {tips_dir}/Tips {tips_dir}/PogoHelper')
         self.exec(f'/usr/sbin/chown 0 {tips_dir}/PogoHelper')
 
+    def create_fakefs(self) -> None:
+        logger.info('creating fakefs')
+        try:
+            self._sftp.stat('/dev/disk0s1s8')
+        except FileNotFoundError:
+            self.exec('/sbin/newfs_apfs -A -D -o role=r -v System /dev/disk0s1')
+
+        self.mount_apfs('/dev/disk0s1s8', '/mnt8')
+        self.exec('cp -a /mnt1/. /mnt8/')
+        self.umount('/mnt8')
+
+    def place_kernelcachd_using_pongo_kpf(self, preboot_device: Path, local_kernelcache: Path) -> None:
+        logger.info('patching kernel using pongo kpf')
+
+        kpf_executable = '/mnt1/private/var/root/Kernel15Patcher.ios'
+
+        logger.info('placing pongo kpf')
+        self.put_file(PALERA1N_PATH / 'binaries' / 'Kernel15Patcher.ios', kpf_executable)
+        self.chown(kpf_executable, 0)
+        self.chmod(kpf_executable, 0o777)
+
+        im4p = IM4P(local_kernelcache.read_bytes())
+        im4p.payload.decompress()
+        kpp = im4p.payload.extra
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+
+            local_kcache_raw = temp_dir / 'kcache.raw'
+            local_kcache_raw.write_bytes(im4p.payload.output().data)
+
+            with self.get_active_preboot(preboot_device) as preboot:
+                remote_kcache_raw = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.raw'
+                remote_kcache_patched = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.patched'
+                remote_kernelcachd = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kernelcachd'
+                remote_im4p = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.im4p'
+
+                # remove temp files if any
+                self.remove(remote_kcache_raw, force=True)
+                self.remove(remote_kcache_patched, force=True)
+                self.remove(remote_kernelcachd, force=True)
+                self.remove(remote_im4p, force=True)
+
+                # placing raw kernel
+                self.put_file(local_kcache_raw, remote_kcache_raw)
+
+                # patch using pongo kpf
+                self.exec(f'{kpf_executable} {remote_kcache_raw} {remote_kcache_patched}')
+
+                # applying our own patches
+                temp_dir = Path(temp_dir)
+                local_kcache_patched1 = temp_dir / 'kcache.patched'
+                local_kcache_patched2 = temp_dir / 'kcache.patched2'
+                self.get_file(remote_kcache_patched, local_kcache_patched1)
+
+                local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')](local_kcache_patched1,
+                                                                                        local_kcache_patched2, '-o',
+                                                                                        '-e', '-u')
+                im4p = IM4P(fourcc='krnl', payload=local_kcache_patched2.read_bytes())
+                im4p.payload.compress(Compression.LZSS)
+                im4p.payload.extra = kpp
+
+                local_im4p = temp_dir / 'kcache.im4p'
+                local_im4p.write_bytes(im4p.output())
+
+                self.put_file(local_im4p, remote_im4p)
+                self.exec(f'img4 '
+                          f'-i {remote_im4p} '
+                          f'-o {remote_kernelcachd} '
+                          f'-M {preboot}/System/Library/Caches/apticket.der')
+                self.chmod(remote_kernelcachd, 0o644)
+
+                # remove temp files if any
+                self.remove(remote_kcache_raw, force=True)
+                self.remove(remote_kcache_patched, force=True)
+                self.remove(remote_im4p, force=True)
+
     @contextlib.contextmanager
     def get_active_preboot(self, preboot_device: Path) -> Path:
         mountpoint = Path(f'/mnt{str(preboot_device)[-1]}')
@@ -114,6 +214,7 @@ class SSHClient:
         return IMG4(self.cat(APTICKET_DEVICE_PATH)).im4m.output()
 
     def reboot(self) -> None:
+        logger.info('rebooting')
         self.exec_async('/sbin/reboot')
 
     def set_nvram_value(self, key: str, value: str):
@@ -123,13 +224,17 @@ class SSHClient:
         stdout, stderr = self.exec(f'/usr/sbin/nvram {key}')
         return stdout.strip()
 
-    def mount_apfs(self, device: Path, mountpoint: Path) -> None:
+    @path_to_str('device')
+    @path_to_str('mountpoint')
+    def mount_apfs(self, device: str, mountpoint: str) -> None:
         self.exec(f'/sbin/mount_apfs {device} {mountpoint}')
 
-    def umount(self, path: Path) -> None:
+    @path_to_str('path')
+    def umount(self, path: str) -> None:
         self.exec(f'/sbin/umount {path}')
 
-    def cat(self, path: Path) -> bytes:
+    @path_to_str('path')
+    def cat(self, path: str) -> bytes:
         stdout, stderr = self.exec(f'cat {path}')
         return stdout
 

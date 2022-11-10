@@ -39,7 +39,11 @@ Commands:
 
 - Execute from shell:
     ```shell
-    python3 -m pylera1n jailbreak
+    # for first time only
+    python3 -m pylera1n -v <iOS-Versio> --dump-blobs --kernelcachd pongokpf --install-pogo --reboot
+  
+    # if the first command was succcessful, you can now simply run the following for the given device:
+    python3 -m pylera1n jailbreak -v <iOS-Versio> --fsboot
     ```
 - Open `Tips` application.
 - Click the `Install` button
@@ -50,7 +54,7 @@ Commands:
 
 ```shell
 # boot into ramdisk, IPSW can also be downloaded automatically from internet
-python3 -m pylera1n ramdisk --ipsw '~/Downloads/iPhone10,3,iPhone10,6_14.8_18H17_Restore.ipsw'
+python3 -m pylera1n ramdisk --ramdisk-ipsw '~/Downloads/iPhone10,3,iPhone10,6_14.8_18H17_Restore.ipsw'
 
 # connect to ssh
 python3 -m pylera1n ssh
@@ -69,8 +73,8 @@ ls /mnt2
 Use the following snippet to stop the annoying Finder pop-ups when device is in Recovery:
 
 ```shell
-defaults write -g ignore-devices -bool false
-defaults write com.apple.AMPDevicesAgent dontAutomaticallySyncIPods -bool false
+defaults write -g ignore-devices -bool true
+defaults write com.apple.AMPDevicesAgent dontAutomaticallySyncIPods -bool true
 killall Finder
 ```
 
@@ -80,4 +84,7 @@ On iPhone X use the following disk map:
 
 - `disk0s1s1` - `/`
 - `disk0s1s2` - `/private` (SEP Protected)
-- `disk0s1s6` - `/private/var/preboot`
+- iPhone10,3:
+    - `disk0s1s6` - `/private/var/preboot`
+- iPhone10,6:
+    - `disk0s1s7` - `/private/var/preboot`

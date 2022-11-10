@@ -6,8 +6,10 @@ import shutil
 import tarfile
 import tempfile
 import time
+from enum import Enum
 from io import BytesIO
 from pathlib import Path
+from ssl import SSLEOFError
 from typing import Optional, Generator
 from zipfile import ZipFile
 
@@ -19,7 +21,8 @@ from plumbum import local
 from pyimg4 import IM4P, Compression, IMG4
 from pyipsw.pyipsw import get_devices
 from pymobiledevice3 import usbmux
-from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError, ConnectionFailedError
+from pymobiledevice3.exceptions import NoDeviceConnectedError, IRecvNoDeviceConnectedError, ConnectionFailedError, \
+    MuxException
 from pymobiledevice3.irecv import IRecv, Mode
 from pymobiledevice3.lockdown import LockdownClient
 from pymobiledevice3.restore.ipsw.ipsw import IPSW
@@ -27,21 +30,17 @@ from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
 
+from pylera1n.common import DEFAULT_STORAGE, PALERA1N_PATH, BOOTLOGO_PATH, DEVICE_PREBOOT, wait, OS_VARIANT, \
+    blacktop_ipsw
 from pylera1n.exceptions import MissingProductVersionError
 from pylera1n.sshclient import SSHClient
 
 logger = logging.getLogger(__name__)
 
-OS_VARIANT = os.uname().sysname
-DEFAULT_STORAGE = Path('~/.pylera1n').expanduser()
-PALERA1N_PATH = Path(__file__).parent / 'palera1n'
 
-blacktop_ipsw = local['ipsw']
-
-
-def wait(seconds: int) -> None:
-    for _ in trange(seconds):
-        time.sleep(1)
+class KernelcachdStrategy(Enum):
+    PongoKpf = 'pongo'
+    Normal = 'normal'
 
 
 def download_gaster(output: Path, os_version: str = os.uname().sysname):
@@ -77,7 +76,10 @@ def wait_device_ssh() -> Generator[SSHClient, None, None]:
     sock = None
     while sock is None:
         # wait for ssh server to start
-        sock = device.connect(SSH_PORT)
+        try:
+            sock = device.connect(SSH_PORT)
+        except MuxException:
+            pass
 
     client = None
 
@@ -131,8 +133,6 @@ class Pylera1n:
         self._product_type = None
         self._product_version = product_version
         self._gaster = local[str(gaster_path)]
-        self._iboot64patcher = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcher')]
-        self._kernel64patcher = local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')]
         self._hdiutil = None if os.uname().sysname != 'Darwin' else local['hdiutil']
         self._ramdisk_ipsw_path = ramdisk_ipsw
         self._ramdisk_ipsw: Optional[IPSW] = None
@@ -169,20 +169,30 @@ class Pylera1n:
             with IRecv(timeout=1) as irecv:
                 return irecv.mode == Mode.DFU_MODE
 
-    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, install_pogo=False) -> None:
+    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, install_pogo=False, fsboot=False,
+                  fakefs=False) -> None:
         logger.info('jailbreaking')
 
         if recreate_boot:
             rm_tree(self._storage_boot_dir)
 
+        kernelcachd = None
+        if fsboot:
+            kernelcachd = KernelcachdStrategy.PongoKpf
+
         if not self._storage_shsh_blob.exists() or recreate_ramdisk:
             logger.info('creating ramdisk')
             self.boot_ramdisk(recreate_ramdisk)
             self.perform_ramdisk_ssh_operations(dump_blobs=True, install_pogo=install_pogo,
-                                                enable_development_options=self._devel is True, reboot=True)
+                                                enable_development_options=self._devel is True, reboot=True,
+                                                kernelcachd=kernelcachd, fakefs=fakefs)
 
         self.enter_dfu()
-        self._boot_boot()
+
+        if fsboot:
+            self._boot_boot_using_fsboot(fakefs=fakefs)
+        else:
+            self._boot_boot_using_bootx(fakefs=fakefs)
 
     def boot_ramdisk(self, recreate_ramdisk=False) -> None:
         """ boot into ramdisk """
@@ -208,9 +218,13 @@ class Pylera1n:
                 return False
         return True
 
+    @property
+    def _preboot_device(self) -> str:
+        return DEVICE_PREBOOT[self._product_type]
+
     def perform_ramdisk_ssh_operations(self, dump_blobs=False, install_pogo=False,
-                                       enable_development_options=False, auto_boot=False,
-                                       reboot=False) -> None:
+                                       enable_development_options=False, kernelcachd: KernelcachdStrategy = None,
+                                       auto_boot=False, reboot=False, fakefs=False) -> None:
         """ create blobs, install pogo and patch nvram if on non-rootless """
         with wait_device_ssh() as ssh:
             if dump_blobs:
@@ -223,10 +237,38 @@ class Pylera1n:
             if enable_development_options:
                 ssh.enable_development_options()
 
+            if fakefs:
+                ssh.create_fakefs()
+
+            if kernelcachd == KernelcachdStrategy.Normal:
+                logger.info('placing kernelcachd')
+                with ssh.get_active_preboot(self._preboot_device) as preboot:
+                    remote_kernelcachd = preboot / 'System' / 'Library' / 'Caches' / 'com.apple.kernelcaches' / 'kernelcachd'
+                    ssh.put_file(
+                        self._get_boot_component('KernelCache', basename='krnl', is_restore=False, cache=False),
+                        remote_kernelcachd)
+                    ssh.chmod(remote_kernelcachd, 0o644)
+
+            if kernelcachd == KernelcachdStrategy.PongoKpf:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    temp_dir = Path(temp_dir)
+
+                    local_kernelcache = temp_dir / 'KernelCache.im4p'
+                    build_identity = self.boot_ipsw.build_manifest.get_build_identity(self._hardware_model)
+                    component_path = build_identity.get_component_path('KernelCache')
+                    local_kernelcache.write_bytes(self.boot_ipsw.read(component_path))
+                    ssh.place_kernelcachd_using_pongo_kpf(self._preboot_device, local_kernelcache)
+
             ssh.auto_boot = auto_boot
 
             if reboot:
                 ssh.reboot()
+
+    @property
+    def ramdisk_ipsw(self) -> IPSW:
+        if self._ramdisk_ipsw is None:
+            self._init_ramdisk_ipsw()
+        return self._ramdisk_ipsw
 
     @property
     def _ramdisk_im4m(self) -> bytes:
@@ -239,13 +281,9 @@ class Pylera1n:
         if img4_file.exists():
             return img4_file
 
-        if self._ramdisk_ipsw is None:
-            self._init_ramdisk_ipsw()
-
         logger.info('creating restore logo (ramdisk)')
 
-        im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-        im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
+        im4p_file = IM4P(fourcc='logo', payload=BOOTLOGO_PATH.read_bytes(), description='EmbeddedImages-121.100.10')
         img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=self._ramdisk_im4m).output())
 
         return img4_file
@@ -255,18 +293,15 @@ class Pylera1n:
         if img4_file.exists():
             return img4_file
 
-        if self._ramdisk_ipsw is None:
-            self._init_ramdisk_ipsw()
-
         logger.info(f'creating {component} (ramdisk)')
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            build_identity = self._ramdisk_ipsw.build_manifest.get_build_identity(self._hardware_model)
+            build_identity = self.ramdisk_ipsw.build_manifest.get_build_identity(self._hardware_model)
 
             im4p_file = temp_dir / component
-            im4p_file.write_bytes(self._ramdisk_ipsw.read(build_identity.get_component_path(component)))
+            im4p_file.write_bytes(self.ramdisk_ipsw.read(build_identity.get_component_path(component)))
             self._patch_ramdisk_component(component, im4p_file, img4_file)
             return img4_file
 
@@ -366,6 +401,12 @@ class Pylera1n:
         img4_file.write_bytes(img4.output())
 
     @property
+    def boot_ipsw(self) -> IPSW:
+        if self._boot_ipsw is None:
+            self._init_boot_ipsw()
+        return self._boot_ipsw
+
+    @property
     def _boot_im4m(self) -> bytes:
         return self._storage_shsh_blob.read_bytes()
 
@@ -375,52 +416,50 @@ class Pylera1n:
         if img4_file.exists():
             return img4_file
 
-        if self._boot_ipsw is None:
-            self._init_boot_ipsw()
-
         logger.info('creating restore logo (boot)')
 
-        im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-        im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
+        im4p_file = IM4P(fourcc='logo', payload=BOOTLOGO_PATH.read_bytes(), description='EmbeddedImages-121.100.10')
         img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=self._boot_im4m).output())
 
         return img4_file
 
-    def _get_boot_component(self, component: str) -> Path:
-        img4_file = (self._storage_boot_dir / component).with_suffix('.img4')
-        if img4_file.exists():
-            return img4_file
+    def _get_boot_component(self, component: str, basename: str = None, cache=True, **kwargs) -> Path:
+        if basename is None:
+            img4_file = (self._storage_boot_dir / component).with_suffix('.img4')
+        else:
+            img4_file = (self._storage_boot_dir / basename).with_suffix('.img4')
 
-        if self._boot_ipsw is None:
-            self._init_boot_ipsw()
+        if cache and img4_file.exists():
+            return img4_file
 
         logger.info(f'creating {component} (boot)')
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            build_identity = self._boot_ipsw.build_manifest.get_build_identity(self._hardware_model)
+            build_identity = self.boot_ipsw.build_manifest.get_build_identity(self._hardware_model)
             component_path = build_identity.get_component_path(component)
 
             if self._devel:
                 if component_path in ('iBSS', 'iBEC'):
                     component_path = component_path.replace('RELEASE', 'DEVELOPMENT')
-                elif component_path == 'StaticKernelCache':
+                elif component_path == 'KernelCache':
                     component_path = component_path.replace('release', 'development')
 
             im4p_file = temp_dir / component
-            im4p_file.write_bytes(self._boot_ipsw.read(component_path))
-            self._patch_boot_component(component, im4p_file, img4_file)
+            im4p_file.write_bytes(self.boot_ipsw.read(component_path))
+            self._patch_boot_component(component, im4p_file, img4_file, **kwargs)
             return img4_file
 
-    def _patch_boot_component(self, component: str, im4p_file: Path, img4_file: Path) -> None:
+    def _patch_boot_component(self, component: str, im4p_file: Path, img4_file: Path, **kwargs) -> None:
         {
             'iBSS': self._patch_boot_ibss,
             'iBEC': self._patch_boot_ibec,
+            'iBoot': self._patch_boot_iboot,
             'KernelCache': self._patch_boot_kernel_cache,
             'DeviceTree': self._patch_boot_device_tree,
             'StaticTrustCache': self._patch_boot_static_trust_cache,
-        }[component](im4p_file, img4_file)
+        }[component](im4p_file, img4_file, **kwargs)
 
     def _patch_boot_ibss(self, im4p_file: Path, img4_file: Path) -> None:
         iboot_dec_file = im4p_file.with_suffix('.dec')
@@ -443,24 +482,37 @@ class Pylera1n:
         img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
         img4_file.write_bytes(img4.output())
 
-    def _patch_boot_kernel_cache(self, im4p_file: Path, img4_file: Path) -> None:
+    def _patch_boot_iboot(self, im4p_file: Path, img4_file: Path, fakefs=False) -> None:
+        iboot_dec_file = im4p_file.with_suffix('.dec')
+        patched_iboot_file = im4p_file.with_suffix('.patched')
+        self.decrypt(im4p_file, iboot_dec_file)
+        boot_args = '-v keepsyms=1 debug=0x2014e'
+        if fakefs:
+            boot_args += ' rd=disk0s1s8'
+        self.patch_iboot_component(iboot_dec_file, patched_iboot_file, boot_args, fsboot=True)
+        patched_iboot_file.write_bytes(patched_iboot_file.read_bytes().replace(b'/kernelcache', b'/kernelcachd'))
+        if 0x8010 <= self._chip_id <= 0x801f:
+            fourcc = 'ibss'
+        else:
+            fourcc = 'ibec'
+        im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc=fourcc, description='Unknown')
+        img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+        img4_file.write_bytes(img4.output())
+
+    def _patch_boot_kernel_cache(self, im4p_file: Path, img4_file: Path, is_restore=True) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
             kcache_raw_file = temp_dir / 'kcache.raw'
             kernelcache_buf = im4p_file.read_bytes()
-            kpp_bin = temp_dir / 'kpp.bin'
             kcache_patched_file = temp_dir / 'kcache.patched'
-            fourcc = 'rkrn'
+            fourcc = 'rkrn' if is_restore else 'krnl'
 
             im4p = IM4P(kernelcache_buf)
+            kpp = im4p.payload.extra
             im4p.payload.decompress()
             kcache_raw = im4p.payload.output().data
 
             kcache_raw_file.write_bytes(kcache_raw)
-
-            if not self._devel:
-                if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                    kpp_bin.write_bytes(im4p.payload.extra)
 
             if self._devel:
                 im4p = IM4P(kernelcache_buf)
@@ -481,9 +533,7 @@ class Pylera1n:
 
                 im4p = IM4P(fourcc=fourcc, payload=kcache_patched)
                 im4p.payload.compress(Compression.LZSS)
-
-                if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                    im4p.payload.extra = open(kpp_bin, 'rb')
+                im4p.payload.extra = kpp
 
                 img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
                 img4_file.write_bytes(img4.output())
@@ -500,15 +550,20 @@ class Pylera1n:
         img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
         img4_file.write_bytes(img4.output())
 
-    def _boot_boot(self) -> None:
+    def _boot_boot_using_bootx(self, fakefs=False) -> None:
         self._storage_boot_dir.mkdir(exist_ok=True, parents=True)
 
-        logger.info('booting patched boot image')
+        logger.info('booting patched boot image (bootx)')
 
         self._gaster_pwn()
 
         ibss = self._get_boot_component('iBSS')
-        ibec = self._get_boot_component('iBEC')
+
+        basename = 'iBEC'
+        if fakefs:
+            basename += '-fakefs'
+        basename += '.img4'
+        ibec = self._get_boot_component('iBEC', basename=basename)
 
         self._gaster_reset()
 
@@ -520,6 +575,7 @@ class Pylera1n:
         try:
             with IRecv() as irecv:
                 assert irecv.mode == Mode.RECOVERY_MODE_2
+
                 logger.info('sending iBEC')
                 irecv.send_buffer(ibec.read_bytes())
 
@@ -530,9 +586,7 @@ class Pylera1n:
             # device will reboot and cause a broken pipe
             pass
 
-        # waiting for iBoot to load
-        logger.info('waiting for iBoot to load')
-        wait(3)
+        time.sleep(1)
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
@@ -550,7 +604,49 @@ class Pylera1n:
             logger.info('sending KernelCache')
             irecv.send_buffer(self._get_boot_component('KernelCache').read_bytes())
             try:
+                logger.info('booting into ramdisk (boot image)')
                 irecv.send_command('bootx', b_request=1)
+            except USBError:
+                pass
+
+    def _boot_boot_using_fsboot(self, fakefs=False) -> None:
+        self._storage_boot_dir.mkdir(exist_ok=True, parents=True)
+
+        logger.info(f'booting patched boot image (fsboot) (fakefs: {fakefs})')
+
+        self._gaster_pwn()
+
+        ibss = None
+
+        if not (0x8010 <= self._chip_id <= 0x801f):
+            ibss = self._get_boot_component('iBSS')
+
+        basename = 'iBoot'
+        if fakefs:
+            basename += '-fakefs'
+        basename += '.img4'
+        iboot = self._get_boot_component('iBoot', basename=basename, fakefs=fakefs)
+
+        self._gaster_reset()
+
+        if ibss is not None:
+            with IRecv() as irecv:
+                logger.info('sending iBSS')
+                irecv.send_buffer(ibss.read_bytes())
+                time.sleep(1)
+
+            with IRecv() as irecv:
+                assert irecv.mode == Mode.RECOVERY_MODE_2
+
+        with IRecv() as irecv:
+            logger.info('sending iBoot')
+            irecv.send_buffer(iboot.read_bytes())
+            time.sleep(1)
+
+        with IRecv() as irecv:
+            try:
+                logger.info('booting into fs')
+                irecv.send_command('fsboot')
             except USBError:
                 pass
 
@@ -570,6 +666,7 @@ class Pylera1n:
             assert irecv.mode == Mode.DFU_MODE
             logger.info('sending iBSS')
             irecv.send_buffer(ibss)
+            time.sleep(1)
 
         try:
             with IRecv() as irecv:
@@ -578,10 +675,12 @@ class Pylera1n:
                 irecv.send_buffer(ibec)
 
                 if self._chip_id in (0x8010, 0x8015, 0x8011, 0x8012):
-                    irecv.send_command('go')
+                    irecv.send_command('go', b_request=1)
         except USBError:
             # device will reboot and cause a broken pipe
             pass
+
+        time.sleep(1)
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
@@ -605,6 +704,7 @@ class Pylera1n:
             logger.info('sending RestoreKernelCache')
             irecv.send_buffer(self._get_ramdisk_component('RestoreKernelCache').read_bytes())
             try:
+                logger.info('booting into ramdisk (ramdisk image)')
                 irecv.send_command('bootx', b_request=1)
             except USBError:
                 pass
@@ -614,26 +714,49 @@ class Pylera1n:
         try:
             with LockdownClient() as lockdown:
                 lockdown.enter_recovery()
-        except NoDeviceConnectedError:
-            with IRecv(timeout=1) as irecv:
+        except (NoDeviceConnectedError, SSLEOFError):
+            with IRecv(timeout=3) as irecv:
                 irecv.reboot()
 
     def _gaster_pwn(self) -> None:
+        logger.info('gaster pwn')
         self._gaster('pwn')
         time.sleep(1)
 
     def _gaster_reset(self) -> None:
+        logger.info('gaster reset')
         self._gaster('reset')
         time.sleep(1)
 
     def decrypt(self, payload: Path, output: Path) -> None:
         self._gaster('decrypt', payload, output)
 
-    def patch_iboot_component(self, iboot: Path, output: Path, boot_args: str = None) -> None:
-        if boot_args is None:
-            self._iboot64patcher(iboot, output)
+    @staticmethod
+    def patch_iboot_component(iboot: Path, output: Path, boot_args: str = None, fsboot=False) -> None:
+        if fsboot:
+            executable = str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcherfsboot')
         else:
-            self._iboot64patcher(iboot, output, '-b', boot_args)
+            executable = str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcher')
+
+        if boot_args is None:
+            local[executable](iboot, output)
+        else:
+            local[executable](iboot, output, '-b', boot_args)
+
+    @staticmethod
+    def patch_kernelcache(kernelcache: Path, output: Path, flag_o=False) -> None:
+        args = [kernelcache, output, '-a']
+        if flag_o:
+            args.append('-o')
+        local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')](args)
+
+    @staticmethod
+    def create_kernelcache_patch_file(original: bytes, patched: bytes, output: Path) -> None:
+        result = '#AMFI\n\n'
+        for i, _ in enumerate(original):
+            if original[i] != patched[i]:
+                result += f'{hex(i)} {hex(original[i])} {hex(patched[i])}\n'
+        output.write_text(result)
 
     @staticmethod
     def patch(buf: bytes, patches: str) -> bytes:
@@ -665,30 +788,16 @@ class Pylera1n:
 
         return patched
 
-    def patch_kernelcache(self, kernelcache: Path, output: Path, flag_o=False) -> None:
-        args = [kernelcache, output, '-a']
-        if flag_o:
-            args.append('-o')
-        self._kernel64patcher(args)
-
-    @staticmethod
-    def create_kernelcache_patch_file(original: bytes, patched: bytes, output: Path) -> None:
-        result = '#AMFI\n\n'
-        for i, _ in enumerate(original):
-            if original[i] != patched[i]:
-                result += f'{hex(i)} {hex(original[i])} {hex(patched[i])}\n'
-        output.write_text(result)
-
     def enter_dfu(self) -> None:
         while not self.in_dfu:
             print('Prepare to do the following to start enter DFU mode:')
-            print(' - Hold VolDown+Power for 5 seconds')
+            print(' - Hold VolDown+Power for 4 seconds (Start only when prompted to!)')
             print(' - Keep holding VolDown for up to 10 seconds')
             input('HIT RETURN TO START> ')
             self.reboot()
 
-            print('[1] Hold VolDown+Power for 5 seconds')
-            wait(5)
+            print('[1] Hold VolDown+Power for 4 seconds')
+            wait(4)
             print('[2] Keep holding VolDown for up to 10 seconds')
             for _ in trange(10):
                 try:
@@ -713,16 +822,20 @@ class Pylera1n:
                 self._chip_id = lockdown.chip_id
                 self._hardware_model = lockdown.hardware_model
                 self._product_type = lockdown.product_type
+
+                logger.info('entering recovery')
+                lockdown.enter_recovery()
         except (NoDeviceConnectedError, ConnectionFailedError):
             with IRecv(timeout=1) as irecv:
                 self._board_id = irecv.board_id
                 self._chip_id = irecv.chip_id
                 self._hardware_model = irecv.hardware_model
                 self._product_type = irecv.product_type
+        logger.info(f'init with device: {self}')
 
     def _init_ramdisk_ipsw(self) -> None:
         if self._ramdisk_ipsw_path is None:
-            devices = list(get_devices(f"'{self._product_type}' == device and '15.6' == version"))
+            devices = list(get_devices(f"'{self._product_type}' == device and '15.6.1' == version"))
             assert len(devices) == 1
             url = devices[0]['url']
 
