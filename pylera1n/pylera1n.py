@@ -93,6 +93,18 @@ def wait_device_ssh() -> Generator[SSHClient, None, None]:
         client.close()
 
 
+def rm_tree(pth: Path) -> None:
+    if not pth.exists():
+        return
+
+    for child in pth.glob('*'):
+        if child.is_file():
+            child.unlink()
+        else:
+            rm_tree(child)
+    pth.rmdir()
+
+
 RESTORE_COMPONENTS = ('iBSS', 'iBEC', 'RestoreDeviceTree', 'RestoreRamDisk', 'RestoreTrustCache',
                       'RestoreKernelCache', 'RestoreLogo')
 
@@ -125,7 +137,7 @@ class Pylera1n:
         self._ramdisk_ipsw_path = ramdisk_ipsw
         self._ramdisk_ipsw: Optional[IPSW] = None
         self._ipsw_path = ipsw
-        self._ipsw: Optional[IPSW] = None
+        self._boot_ipsw: Optional[IPSW] = None
         self._devel = devel
         self._tips = ZipFile(pogo_path)
         self._init_device_info()
@@ -141,7 +153,6 @@ class Pylera1n:
         self._storage_shsh_blob = shsh_blob_dir / f'{self._hardware_model}-{self._product_version}.der'
 
         self._storage_ramdisk_dir = self._storage / 'ramdisk' / self._hardware_model
-        self._storage_ramdisk_dir.mkdir(exist_ok=True, parents=True)
 
         self._storage_boot_dir = self._storage / 'boot' / self._hardware_model / self._product_version
         self._storage_boot_dir.mkdir(exist_ok=True, parents=True)
@@ -158,15 +169,11 @@ class Pylera1n:
             with IRecv(timeout=1) as irecv:
                 return irecv.mode == Mode.DFU_MODE
 
-    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, kernel_patches: Path = None,
-                  iboot_patches: Path = None, install_pogo=False) -> None:
+    def jailbreak(self, recreate_ramdisk=False, recreate_boot=False, install_pogo=False) -> None:
         logger.info('jailbreaking')
 
-        if kernel_patches is not None:
-            recreate_boot = True
-
-        if iboot_patches is not None:
-            recreate_boot = True
+        if recreate_boot:
+            rm_tree(self._storage_boot_dir)
 
         if not self._storage_shsh_blob.exists() or recreate_ramdisk:
             logger.info('creating ramdisk')
@@ -175,21 +182,16 @@ class Pylera1n:
                                                 enable_development_options=self._devel is True, reboot=True)
 
         self.enter_dfu()
-        self.pwn()
-
-        if not self.has_prepared_boot or recreate_boot:
-            self.create_patched_boot(kernel_patches=kernel_patches, iboot_patches=iboot_patches)
-
         self._boot_boot()
 
     def boot_ramdisk(self, recreate_ramdisk=False) -> None:
         """ boot into ramdisk """
         logger.info('waiting for device to enter DFU')
-        self.enter_dfu()
-        self.pwn()
 
-        if not self.has_prepared_ramdisk or recreate_ramdisk:
-            self.create_ramdisk()
+        if recreate_ramdisk:
+            rm_tree(self._storage_ramdisk_dir)
+
+        self.enter_dfu()
         self._boot_ramdisk()
 
     @property
@@ -226,249 +228,300 @@ class Pylera1n:
             if reboot:
                 ssh.reboot()
 
-    def create_ramdisk(self) -> None:
+    @property
+    def _ramdisk_im4m(self) -> bytes:
+        with open(PALERA1N_PATH / 'ramdisk' / 'shsh' / f'0x{self._chip_id:x}.shsh', 'rb') as costume_ramdisk:
+            return plistlib.load(costume_ramdisk)['ApImg4Ticket']
+
+    @property
+    def _ramdisk_restore_logo(self) -> Path:
+        img4_file = self._storage_ramdisk_dir / 'RestoreLogo.img4'
+        if img4_file.exists():
+            return img4_file
+
         if self._ramdisk_ipsw is None:
             self._init_ramdisk_ipsw()
 
-        logger.info('creating ramdisk')
+        logger.info('creating restore logo (ramdisk)')
+
+        im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
+        im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
+        img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=self._ramdisk_im4m).output())
+
+        return img4_file
+
+    def _get_ramdisk_component(self, component: str) -> Path:
+        img4_file = (self._storage_ramdisk_dir / component).with_suffix('.img4')
+        if img4_file.exists():
+            return img4_file
+
+        if self._ramdisk_ipsw is None:
+            self._init_ramdisk_ipsw()
+
+        logger.info(f'creating {component} (ramdisk)')
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
-
-            with open(PALERA1N_PATH / 'ramdisk' / 'shsh' / f'0x{self._chip_id:x}.shsh', 'rb') as costum_ramdisk:
-                im4m = plistlib.load(costum_ramdisk)['ApImg4Ticket']
 
             build_identity = self._ramdisk_ipsw.build_manifest.get_build_identity(self._hardware_model)
 
-            logger.info('patching RestoreLogo')
-            img4_file = self._storage_ramdisk_dir / 'RestoreLogo.img4'
-            im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-            im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
-            img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=im4m).output())
+            im4p_file = temp_dir / component
+            im4p_file.write_bytes(self._ramdisk_ipsw.read(build_identity.get_component_path(component)))
+            self._patch_ramdisk_component(component, im4p_file, img4_file)
+            return img4_file
 
-            # extract
-            for component in ('iBSS', 'iBEC', 'RestoreDeviceTree', 'RestoreRamDisk', 'RestoreTrustCache',
-                              'RestoreKernelCache'):
-                logger.info(f'patching {component}')
+    def _patch_ramdisk_component(self, component: str, im4p_file: Path, img4_file: Path) -> None:
+        {
+            'iBSS': self._patch_ramdisk_ibss,
+            'iBEC': self._patch_ramdisk_ibec,
+            'RestoreKernelCache': self._patch_ramdisk_restore_kernel_cache,
+            'RestoreRamDisk': self._patch_ramdisk_restore_ramdisk,
+            'RestoreDeviceTree': self._patch_ramdisk_device_tree,
+            'RestoreTrustCache': self._patch_ramdisk_restore_trust_cache,
+        }[component](im4p_file, img4_file)
 
-                local_component = temp_dir / component
-                local_component.write_bytes(self._ramdisk_ipsw.read(build_identity.get_component_path(component)))
+    def _patch_ramdisk_ibss(self, im4p_file: Path, img4_file: Path) -> None:
+        decrypted_iboot = im4p_file.with_suffix('.dec')
+        self.decrypt(im4p_file, decrypted_iboot)
+        patched_iboot_file = im4p_file.with_suffix('.patched')
+        self.patch_iboot_component(decrypted_iboot, patched_iboot_file)
 
-                im4p_file = local_component
-                img4_file = (self._storage_ramdisk_dir / component).with_suffix('.img4')
+        im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc='ibss')
+        img4 = IMG4(im4p=im4p, im4m=self._ramdisk_im4m)
+        img4_file.write_bytes(img4.output())
 
-                if component in ('iBSS', 'iBEC'):
-                    iboot = local_component
-                    decrypted_iboot = iboot.with_suffix('.dec')
-                    self.decrypt(iboot, decrypted_iboot)
-                    patched_iboot_file = iboot.with_suffix('.patched')
+    def _patch_ramdisk_ibec(self, im4p_file: Path, img4_file: Path) -> None:
+        decrypted_iboot = im4p_file.with_suffix('.dec')
+        self.decrypt(im4p_file, decrypted_iboot)
+        patched_iboot_file = im4p_file.with_suffix('.patched')
 
-                    if iboot.parts[-1] == 'iBEC':
-                        boot_args = 'rd=md0 debug=0x2014e -v wdt=-1 '
-                        if self._chip_id in (0x8960, 0x7000, 0x7001):
-                            # TODO: macos variant?
-                            boot_args += '-restore'
-                        self.patch_iboot_component(decrypted_iboot, patched_iboot_file, boot_args)
-                    else:
-                        self.patch_iboot_component(decrypted_iboot, patched_iboot_file)
+        boot_args = 'rd=md0 debug=0x2014e -v wdt=-1 '
+        if self._chip_id in (0x8960, 0x7000, 0x7001):
+            # TODO: macos variant?
+            boot_args += '-restore'
+        self.patch_iboot_component(decrypted_iboot, patched_iboot_file, boot_args)
 
-                    fourcc = component.lower()
-                    im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc=fourcc)
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+        im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc='ibec')
+        img4 = IMG4(im4p=im4p, im4m=self._ramdisk_im4m)
+        img4_file.write_bytes(img4.output())
 
-                elif component == 'RestoreKernelCache':
-                    kcache_raw = temp_dir / 'kcache.raw'
-                    kcache_patched = temp_dir / 'kcache.patched'
-                    im4p_payload = IM4P(im4p_file.read_bytes()).payload
-                    im4p_payload.decompress()
-                    kcache_raw.write_bytes(im4p_payload.output().data)
-                    self.patch_kernelcache(kcache_raw, kcache_patched)
+    def _patch_ramdisk_restore_kernel_cache(self, im4p_file: Path, img4_file: Path) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            kcache_raw = temp_dir / 'kcache.raw'
+            kcache_patched = temp_dir / 'kcache.patched'
+            im4p_payload = IM4P(im4p_file.read_bytes()).payload
+            im4p_payload.decompress()
+            kcache_raw.write_bytes(im4p_payload.output().data)
+            self.patch_kernelcache(kcache_raw, kcache_patched)
 
-                    im4p = IM4P(fourcc='rkrn', payload=kcache_patched.read_bytes())
-                    im4p.payload.compress(Compression.LZSS)
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+            im4p = IM4P(fourcc='rkrn', payload=kcache_patched.read_bytes())
+            im4p.payload.compress(Compression.LZSS)
+            img4 = IMG4(im4p=im4p, im4m=self._ramdisk_im4m)
+            img4_file.write_bytes(img4.output())
 
-                elif component == 'RestoreRamDisk':
-                    dmg = temp_dir / 'ramdisk.dmg'
-                    im4p_file = IM4P(local_component.read_bytes())
-                    dmg.write_bytes(im4p_file.payload.output().data)
+    def _patch_ramdisk_restore_ramdisk(self, im4p_file: Path, img4_file: Path) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            dmg = temp_dir / 'ramdisk.dmg'
+            im4p_file = IM4P(im4p_file.read_bytes())
+            dmg.write_bytes(im4p_file.payload.output().data)
 
-                    if self._hdiutil is None:
-                        raise NotImplementedError('missing hdiutil')
-                    self._hdiutil('resize', '-size', '256MB', dmg)
+            if self._hdiutil is None:
+                raise NotImplementedError('missing hdiutil')
+            self._hdiutil('resize', '-size', '256MB', dmg)
 
-                    mountpoint = temp_dir / 'sshrd'
-                    mountpoint.mkdir(exist_ok=True, parents=True)
-                    self._hdiutil('attach', '-mountpoint', mountpoint, dmg)
+            mountpoint = temp_dir / 'sshrd'
+            mountpoint.mkdir(exist_ok=True, parents=True)
+            self._hdiutil('attach', '-mountpoint', mountpoint, dmg)
 
-                    with tarfile.open(PALERA1N_PATH / 'ramdisk' / 'other' / 'ramdisk.tar.gz') as costum_ramdisk:
-                        costum_ramdisk.extractall(mountpoint)
+            with tarfile.open(PALERA1N_PATH / 'ramdisk' / 'other' / 'ramdisk.tar.gz') as costum_ramdisk:
+                costum_ramdisk.extractall(mountpoint)
 
-                    logger.info('extracting Pogo.app/* contents into /usr/local/bin/loader.app/*')
-                    local_app = temp_dir / 'Pogo'
-                    self._tips.extractall(local_app)
-                    loader_app = mountpoint / 'usr' / 'local' / 'bin' / 'loader.app'
-                    shutil.rmtree(mountpoint / loader_app)
-                    shutil.copytree(local_app / 'Payload' / 'Pogo.app', loader_app)
+            logger.info('extracting Pogo.app/* contents into /usr/local/bin/loader.app/*')
+            local_app = temp_dir / 'Pogo'
+            self._tips.extractall(local_app)
+            loader_app = mountpoint / 'usr' / 'local' / 'bin' / 'loader.app'
+            shutil.rmtree(mountpoint / loader_app)
+            shutil.copytree(local_app / 'Payload' / 'Pogo.app', loader_app)
 
-                    logger.info('renaming /usr/local/bin/loader.app/Pogo -> /usr/local/bin/loader.app/Tips')
-                    shutil.move(loader_app / 'Pogo', loader_app / 'Tips')
+            logger.info('renaming /usr/local/bin/loader.app/Pogo -> /usr/local/bin/loader.app/Tips')
+            shutil.move(loader_app / 'Pogo', loader_app / 'Tips')
 
-                    self._hdiutil('detach', '-force', mountpoint)
-                    self._hdiutil('resize', '-sectors', 'min', dmg)
+            self._hdiutil('detach', '-force', mountpoint)
+            self._hdiutil('resize', '-sectors', 'min', dmg)
 
-                    im4p = IM4P(payload=dmg.read_bytes(), fourcc='rdsk')
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+            im4p = IM4P(payload=dmg.read_bytes(), fourcc='rdsk')
+            img4 = IMG4(im4p=im4p, im4m=self._ramdisk_im4m)
+            img4_file.write_bytes(img4.output())
 
-                elif component == 'RestoreDeviceTree':
-                    im4p = IM4P(im4p_file.read_bytes())
-                    im4p.fourcc = 'rdtr'
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+    def _patch_ramdisk_device_tree(self, im4p_file: Path, img4_file: Path) -> None:
+        im4p = IM4P(im4p_file.read_bytes())
+        im4p.fourcc = 'rdtr'
+        img4 = IMG4(im4p=im4p, im4m=self._ramdisk_im4m)
+        img4_file.write_bytes(img4.output())
 
-                elif component == 'RestoreTrustCache':
-                    img4 = IMG4(im4p=im4p_file.read_bytes(), im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+    def _patch_ramdisk_restore_trust_cache(self, im4p_file: Path, img4_file: Path) -> None:
+        img4 = IMG4(im4p=im4p_file.read_bytes(), im4m=self._ramdisk_im4m)
+        img4_file.write_bytes(img4.output())
 
-    def create_patched_boot(self, kernel_patches: Path = None, iboot_patches: Path = None) -> None:
-        logger.info('creating patched boot')
+    @property
+    def _boot_im4m(self) -> bytes:
+        return self._storage_shsh_blob.read_bytes()
 
-        if self._ipsw is None:
-            self._init_ipsw()
+    @property
+    def _boot_restore_logo(self) -> Path:
+        img4_file = self._storage_boot_dir / 'RestoreLogo.img4'
+        if img4_file.exists():
+            return img4_file
 
-        if kernel_patches is None:
-            if self._kernel_patch_file.exists():
-                kernel_patches = self._kernel_patch_file
+        if self._boot_ipsw is None:
+            self._init_boot_ipsw()
 
-        build_identity = self._ipsw.build_manifest.get_build_identity(self._hardware_model)
+        logger.info('creating restore logo (boot)')
 
-        self.pwn()
+        im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
+        im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
+        img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=self._boot_im4m).output())
+
+        return img4_file
+
+    def _get_boot_component(self, component: str) -> Path:
+        img4_file = (self._storage_boot_dir / component).with_suffix('.img4')
+        if img4_file.exists():
+            return img4_file
+
+        if self._boot_ipsw is None:
+            self._init_boot_ipsw()
+
+        logger.info(f'creating {component} (boot)')
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir = Path(temp_dir)
 
-            im4m = self._storage_shsh_blob.read_bytes()
+            build_identity = self._boot_ipsw.build_manifest.get_build_identity(self._hardware_model)
+            component_path = build_identity.get_component_path(component)
 
-            # use costume RestoreLogo
-            logger.info('patching RestoreLogo')
-            img4_file = self._storage_boot_dir / 'RestoreLogo.img4'
-            im4p_file = PALERA1N_PATH / 'other' / 'bootlogo.im4p'
-            im4p_file = IM4P(fourcc='rlgo', payload=im4p_file.read_bytes(), description='Unknown')
-            img4_file.write_bytes(IMG4(im4p=im4p_file, im4m=im4m).output())
+            if self._devel:
+                if component_path in ('iBSS', 'iBEC'):
+                    component_path = component_path.replace('RELEASE', 'DEVELOPMENT')
+                elif component_path == 'StaticKernelCache':
+                    component_path = component_path.replace('release', 'development')
 
-            for component in ('iBSS', 'iBEC', 'DeviceTree', 'StaticTrustCache', 'KernelCache'):
-                logger.info(f'patching {component}')
-                local_component = temp_dir / component
-                component_path = build_identity.get_component_path(component)
+            im4p_file = temp_dir / component
+            im4p_file.write_bytes(self._boot_ipsw.read(component_path))
+            self._patch_boot_component(component, im4p_file, img4_file)
+            return img4_file
 
-                if self._devel:
-                    if component in ('iBSS', 'iBEC'):
-                        component_path = component_path.replace('RELEASE', 'DEVELOPMENT')
-                    if component == 'KernelCache':
-                        component_path = component_path.replace('release', 'development')
+    def _patch_boot_component(self, component: str, im4p_file: Path, img4_file: Path) -> None:
+        {
+            'iBSS': self._patch_boot_ibss,
+            'iBEC': self._patch_boot_ibec,
+            'KernelCache': self._patch_boot_kernel_cache,
+            'DeviceTree': self._patch_boot_device_tree,
+            'StaticTrustCache': self._patch_boot_static_trust_cache,
+        }[component](im4p_file, img4_file)
 
-                local_component.write_bytes(self._ipsw.read(component_path))
-                img4_file = (self._storage_boot_dir / component).with_suffix('.img4')
-                im4p_file = local_component
+    def _patch_boot_ibss(self, im4p_file: Path, img4_file: Path) -> None:
+        iboot_dec_file = im4p_file.with_suffix('.dec')
+        patched_iboot_file = im4p_file.with_suffix('.patched')
+        boot_args = None
+        self.decrypt(im4p_file, iboot_dec_file)
+        self.patch_iboot_component(iboot_dec_file, patched_iboot_file, boot_args)
 
-                if component in ('iBSS', 'iBEC'):
-                    iboot = local_component
-                    iboot_dec_file = iboot.with_suffix('.dec')
-                    patched_iboot_file = iboot.with_suffix('.patched')
-                    boot_args = None
-                    self.decrypt(iboot, iboot_dec_file)
+        im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc='ibss')
+        img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+        img4_file.write_bytes(img4.output())
 
-                    if component == 'iBEC':
-                        boot_args = '-v keepsyms=1 debug=0x2014e panic-wait-forever=1'
-                        logger.debug(f'adding boot args to iBEC: "{boot_args}"')
+    def _patch_boot_ibec(self, im4p_file: Path, img4_file: Path) -> None:
+        iboot_dec_file = im4p_file.with_suffix('.dec')
+        patched_iboot_file = im4p_file.with_suffix('.patched')
+        self.decrypt(im4p_file, iboot_dec_file)
+        self.patch_iboot_component(iboot_dec_file, patched_iboot_file,
+                                   '-v keepsyms=1 debug=0x2014e panic-wait-forever=1')
+        im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc='ibec')
+        img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+        img4_file.write_bytes(img4.output())
 
-                    if iboot_patches is not None:
-                        patched_iboot_file.write_bytes(
-                            self.patch(iboot_dec_file.read_bytes(), iboot_patches.read_text()))
-                    else:
-                        self.patch_iboot_component(iboot_dec_file, patched_iboot_file, boot_args)
+    def _patch_boot_kernel_cache(self, im4p_file: Path, img4_file: Path) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir = Path(temp_dir)
+            kcache_raw_file = temp_dir / 'kcache.raw'
+            kernelcache_buf = im4p_file.read_bytes()
+            kpp_bin = temp_dir / 'kpp.bin'
+            kcache_patched_file = temp_dir / 'kcache.patched'
+            fourcc = 'rkrn'
 
-                    fourcc = component.lower()
-                    im4p = IM4P(payload=patched_iboot_file.read_bytes(), fourcc=fourcc)
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+            im4p = IM4P(kernelcache_buf)
+            im4p.payload.decompress()
+            kcache_raw = im4p.payload.output().data
 
-                if component == 'KernelCache':
-                    kcache_raw_file = temp_dir / 'kcache.raw'
-                    kernelcache_buf = local_component.read_bytes()
-                    kpp_bin = temp_dir / 'kpp.bin'
-                    kcache_patched_file = temp_dir / 'kcache.patched'
-                    fourcc = 'rkrn'
+            kcache_raw_file.write_bytes(kcache_raw)
 
-                    im4p = IM4P(kernelcache_buf)
-                    im4p.payload.decompress()
-                    kcache_raw = im4p.payload.output().data
+            if not self._devel:
+                if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
+                    kpp_bin.write_bytes(im4p.payload.extra)
 
-                    kcache_raw_file.write_bytes(kcache_raw)
+            if self._devel:
+                im4p = IM4P(kernelcache_buf)
+                im4p.fourcc = fourcc
+                img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+                img4_file.write_bytes(img4.output())
+            else:
+                if self._kernel_patch_file.exists():
+                    if kcache_raw.startswith(b'\xca\xfe\xba\xbe'):
+                        # trim FAT image header
+                        kcache_raw = kcache_raw[0x1c:]
 
-                    if not self._devel:
-                        if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                            kpp_bin.write_bytes(im4p.payload.extra)
+                    logger.debug(f'using kernel patch file: {self._kernel_patch_file}')
+                    kcache_patched = self.patch(kcache_raw, self._kernel_patch_file.read_text())
+                else:
+                    self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
+                    kcache_patched = kcache_patched_file.read_bytes()
 
-                    if self._devel:
-                        im4p = IM4P(kernelcache_buf)
-                        im4p.fourcc = fourcc
-                        img4 = IMG4(im4p=im4p, im4m=im4m)
-                        img4_file.write_bytes(img4.output())
-                    else:
-                        if kernel_patches is not None:
-                            if kcache_raw.startswith(b'\xca\xfe\xba\xbe'):
-                                # trim FAt image header
-                                kcache_raw = kcache_raw[0x1c:]
+                im4p = IM4P(fourcc=fourcc, payload=kcache_patched)
+                im4p.payload.compress(Compression.LZSS)
 
-                            logger.debug(f'using kernel patch file: {kernel_patches}')
-                            kcache_patched = self.patch(kcache_raw, kernel_patches.read_text())
-                        else:
-                            self.patch_kernelcache(kcache_raw_file, kcache_patched_file, flag_o=True)
-                            kcache_patched = kcache_patched_file.read_bytes()
+                if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
+                    im4p.payload.extra = open(kpp_bin, 'rb')
 
-                        im4p = IM4P(fourcc=fourcc, payload=kcache_patched)
-                        im4p.payload.compress(Compression.LZSS)
+                img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+                img4_file.write_bytes(img4.output())
 
-                        if self._hardware_model.startswith('iPhone8') or self._hardware_model.startswith('iPad6'):
-                            im4p.payload.extra = open(kpp_bin, 'rb')
+    def _patch_boot_device_tree(self, im4p_file: Path, img4_file: Path) -> None:
+        im4p = IM4P(im4p_file.read_bytes())
+        im4p.fourcc = 'rdtr'
+        img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+        img4_file.write_bytes(img4.output())
 
-                        img4 = IMG4(im4p=im4p, im4m=im4m)
-                        img4_file.write_bytes(img4.output())
-
-                elif component == 'DeviceTree':
-                    im4p = IM4P(im4p_file.read_bytes())
-                    im4p.fourcc = 'rdtr'
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
-
-                elif component == 'StaticTrustCache':
-                    im4p = IM4P(im4p_file.read_bytes())
-                    im4p.fourcc = 'rtsc'
-                    img4 = IMG4(im4p=im4p, im4m=im4m)
-                    img4_file.write_bytes(img4.output())
+    def _patch_boot_static_trust_cache(self, im4p_file: Path, img4_file: Path) -> None:
+        im4p = IM4P(im4p_file.read_bytes())
+        im4p.fourcc = 'rtsc'
+        img4 = IMG4(im4p=im4p, im4m=self._boot_im4m)
+        img4_file.write_bytes(img4.output())
 
     def _boot_boot(self) -> None:
+        self._storage_boot_dir.mkdir(exist_ok=True, parents=True)
+
         logger.info('booting patched boot image')
 
-        self._gaster('reset')
+        self._gaster_pwn()
 
-        # TODO: is really needed?
-        time.sleep(1)
+        ibss = self._get_boot_component('iBSS')
+        ibec = self._get_boot_component('iBEC')
+
+        self._gaster_reset()
 
         with IRecv() as irecv:
             assert irecv.mode == Mode.DFU_MODE
             logger.info('sending iBSS')
-            irecv.send_buffer((self._storage_boot_dir / 'iBSS.img4').read_bytes())
+            irecv.send_buffer(ibss.read_bytes())
 
         try:
             with IRecv() as irecv:
                 assert irecv.mode == Mode.RECOVERY_MODE_2
                 logger.info('sending iBEC')
-                irecv.send_buffer((self._storage_boot_dir / 'iBEC.img4').read_bytes())
+                irecv.send_buffer(ibec.read_bytes())
 
                 if self._chip_id in (0x8010, 0x8015, 0x8011, 0x8012):
                     irecv.send_command('go', b_request=1)
@@ -483,42 +536,46 @@ class Pylera1n:
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
-            irecv.send_buffer((self._storage_boot_dir / 'RestoreLogo.img4').read_bytes())
+            irecv.send_buffer(self._boot_restore_logo.read_bytes())
             irecv.send_command('setpicture 0x1')
 
             logger.info('sending DeviceTree')
-            irecv.send_buffer((self._storage_boot_dir / 'DeviceTree.img4').read_bytes())
+            irecv.send_buffer(self._get_boot_component('DeviceTree').read_bytes())
             irecv.send_command('devicetree')
 
             logger.info('sending StaticTrustCache')
-            irecv.send_buffer((self._storage_boot_dir / 'StaticTrustCache.img4').read_bytes())
+            irecv.send_buffer(self._get_boot_component('StaticTrustCache').read_bytes())
             irecv.send_command('firmware')
 
             logger.info('sending KernelCache')
-            irecv.send_buffer((self._storage_boot_dir / 'KernelCache.img4').read_bytes())
+            irecv.send_buffer(self._get_boot_component('KernelCache').read_bytes())
             try:
                 irecv.send_command('bootx', b_request=1)
             except USBError:
                 pass
 
     def _boot_ramdisk(self) -> None:
+        self._storage_ramdisk_dir.mkdir(exist_ok=True, parents=True)
+
         logger.info('booting ramdisk')
 
-        self._gaster('reset')
+        self._gaster_pwn()
 
-        # TODO: is really needed?
-        time.sleep(1)
+        ibss = self._get_ramdisk_component('iBSS').read_bytes()
+        ibec = self._get_ramdisk_component('iBEC').read_bytes()
+
+        self._gaster_reset()
 
         with IRecv() as irecv:
             assert irecv.mode == Mode.DFU_MODE
             logger.info('sending iBSS')
-            irecv.send_buffer((self._storage_ramdisk_dir / 'iBSS.img4').read_bytes())
+            irecv.send_buffer(ibss)
 
         try:
             with IRecv() as irecv:
                 assert irecv.mode == Mode.RECOVERY_MODE_2
                 logger.info('sending iBEC')
-                irecv.send_buffer((self._storage_ramdisk_dir / 'iBEC.img4').read_bytes())
+                irecv.send_buffer(ibec)
 
                 if self._chip_id in (0x8010, 0x8015, 0x8011, 0x8012):
                     irecv.send_command('go')
@@ -528,25 +585,25 @@ class Pylera1n:
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
-            irecv.send_buffer((self._storage_ramdisk_dir / 'RestoreLogo.img4').read_bytes())
+            irecv.send_buffer(self._ramdisk_restore_logo.read_bytes())
             irecv.send_command('setpicture 0x1')
 
             logger.info('sending RestoreRamDisk')
-            irecv.send_buffer((self._storage_ramdisk_dir / 'RestoreRamDisk.img4').read_bytes())
+            irecv.send_buffer(self._get_ramdisk_component('RestoreRamDisk').read_bytes())
             irecv.send_command('ramdisk')
 
             time.sleep(2)
 
             logger.info('sending RestoreDeviceTree')
-            irecv.send_buffer((self._storage_ramdisk_dir / 'RestoreDeviceTree.img4').read_bytes())
+            irecv.send_buffer(self._get_ramdisk_component('RestoreDeviceTree').read_bytes())
             irecv.send_command('devicetree')
 
             logger.info('sending RestoreTrustCache')
-            irecv.send_buffer((self._storage_ramdisk_dir / 'RestoreTrustCache.img4').read_bytes())
+            irecv.send_buffer(self._get_ramdisk_component('RestoreTrustCache').read_bytes())
             irecv.send_command('firmware')
 
             logger.info('sending RestoreKernelCache')
-            irecv.send_buffer((self._storage_ramdisk_dir / 'RestoreKernelCache.img4').read_bytes())
+            irecv.send_buffer(self._get_ramdisk_component('RestoreKernelCache').read_bytes())
             try:
                 irecv.send_command('bootx', b_request=1)
             except USBError:
@@ -561,9 +618,13 @@ class Pylera1n:
             with IRecv(timeout=1) as irecv:
                 irecv.reboot()
 
-    def pwn(self) -> None:
-        logger.info('pwn-ing')
+    def _gaster_pwn(self) -> None:
         self._gaster('pwn')
+        time.sleep(1)
+
+    def _gaster_reset(self) -> None:
+        self._gaster('reset')
+        time.sleep(1)
 
     def decrypt(self, payload: Path, output: Path) -> None:
         self._gaster('decrypt', payload, output)
@@ -670,10 +731,10 @@ class Pylera1n:
         else:
             self._ramdisk_ipsw = IPSW(ZipFile(self._ramdisk_ipsw_path))
 
-    def _init_ipsw(self) -> None:
+    def _init_boot_ipsw(self) -> None:
         if self._ipsw_path is None:
             devices = list(get_devices(f"'{self._product_type}' == device and '{self._product_version}' == version"))
             assert len(devices) == 1
-            self._ipsw = IPSW(RemoteZip(devices[0]['url']))
+            self._boot_ipsw = IPSW(RemoteZip(devices[0]['url']))
         else:
-            self._ipsw = IPSW(ZipFile(self._ipsw_path))
+            self._boot_ipsw = IPSW(ZipFile(self._ipsw_path))

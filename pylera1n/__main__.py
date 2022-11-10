@@ -88,23 +88,12 @@ def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool, dump_blobs:
 @click.option('--devel', is_flag=True, help='Try using development build instead of original')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
 @click.option('--recreate-boot', is_flag=True, help='Recreate boot if already exists')
-@click.option('--kernel-patches', type=click.Path(dir_okay=False, file_okay=True, exists=True),
-              help='Use costume patch file')
-@click.option('--iboot-patches', type=click.Path(dir_okay=False, file_okay=True, exists=True),
-              help='Use costume patch file')
 @click.option('--install-pogo', default=False, is_flag=True, help='Install Pogo')
 def jailbreak(version: str, ramdisk_ipsw: str, ipsw: str, devel: bool, recreate_ramdisk: bool,
-              recreate_boot: bool, kernel_patches: str, iboot_patches: str, install_pogo: bool):
+              recreate_boot: bool, install_pogo: bool):
     """ Perform full jailbreak """
-    if kernel_patches is not None:
-        kernel_patches = Path(kernel_patches)
-
-    if iboot_patches is not None:
-        iboot_patches = Path(iboot_patches)
-
     Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw, ipsw=ipsw, devel=devel).jailbreak(
-        recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot, kernel_patches=kernel_patches,
-        iboot_patches=iboot_patches, install_pogo=install_pogo)
+        recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot, install_pogo=install_pogo)
 
 
 if __name__ == '__main__':
