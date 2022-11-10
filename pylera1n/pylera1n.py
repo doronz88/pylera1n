@@ -100,7 +100,7 @@ BOOT_COMPONENTS = ('iBSS', 'iBEC', 'DeviceTree', 'StaticTrustCache', 'KernelCach
 
 class Pylera1n:
     def __init__(self, product_version: str = None, ramdisk_ipsw: str = None, ipsw: str = None,
-                 devel=True, storage: Path = DEFAULT_STORAGE):
+                 devel=False, storage: Path = DEFAULT_STORAGE):
         storage.mkdir(parents=True, exist_ok=True)
         self._storage = storage
 
