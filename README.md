@@ -40,15 +40,16 @@ Commands:
 - Execute from shell:
     ```shell
     # for first time only
-    python3 -m pylera1n -v <iOS-Versio> --dump-blobs --kernelcachd pongokpf --install-pogo --reboot
+    python3 -m pylera1n -v <iOS-Version> --dump-blobs --kernelcachd pongokpf --install-pogo --reboot
   
     # if the first command was succcessful, you can now simply run the following for the given device:
-    python3 -m pylera1n jailbreak -v <iOS-Versio> --fsboot
+    python3 -m pylera1n jailbreak -v <iOS-Version> --fsboot
     ```
 - Open `Tips` application.
 - Click the `Install` button
-- Click the `Do All` button
-- Execute the Launch Daemons to start [`rpcserver`](https://github.com/doronz88/rpc-project)
+- Either:
+    - Click the `Do All` button
+    - Execute the Launch Daemons to start [`rpcserver`](https://github.com/doronz88/rpc-project)
 
 ### Modifying `/private`
 
