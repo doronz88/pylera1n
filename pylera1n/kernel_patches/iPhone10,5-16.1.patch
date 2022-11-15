@@ -1,34 +1,33 @@
 # in_static_trust_cache
-FFFFFFF005798A44: orr w0, wzr, #1; ret
+FFFFFFF007317D08: orr w0, wzr, #1; ret
 
 # in_loaded_trust_cache
-FFFFFFF005798A5C: orr w0, wzr, #1; ret
+FFFFFFF007317CE0: orr w0, wzr, #1; ret
 
 # import_iboot_forwarded_roothash
-#FFFFFFF0061AB708: mov x0, #0; ret
+FFFFFFF0061BF708: mov x0, #0; ret
 
 # is_root_hash_authentication_required_ios
-FFFFFFF0062124E0: mov x0, #0; ret
+FFFFFFF0062264E0: mov x0, #0; ret
 
 # authenticate_root_hash
-#FFFFFFF00621227C: mov x0, #0; ret
+FFFFFFF00622627C: mov x0, #0; ret
 
 # validate_on_disk_root_hash return 0
-#FFFFFFF006211FA0: mov x0, #0; ret
+FFFFFFF006225FA0: mov x0, #0; ret
 
 # authapfs_seal_is_broken_full
-#FFFFFFF0061970B8: mov x0, #0; ret
+#FFFFFFF0061AB0B8: mov x0, #0; ret
 
 # mac_mount_check_snapshot_mount
-#FFFFFFF0078641B0: mov x0, #0; ret
+FFFFFFF0078641B0: mov x0, #0; ret
 
 # "root volume seal is broken %p"
-#FFFFFFF006197250: nop
-#FFFFFFF006197164: mov x0, #1; ret
+FFFFFFF0061AB250: nop
 
 # apfs_vfsop_mount
 # get_update_rootfs_rw_patch
-FFFFFFF006207770: nop
+#FFFFFFF006207770: nop
 
 # "Updating mount to read/write mode is not allowed"
 #FFFFFFF0062073A4: nop
