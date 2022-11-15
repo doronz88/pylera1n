@@ -201,6 +201,7 @@ class SSHClient:
     @contextlib.contextmanager
     def get_active_preboot(self, preboot_device: Path) -> Path:
         mountpoint = Path(f'/mnt{str(preboot_device)[-1]}')
+        self.umount(mountpoint)
         self.mount_apfs(preboot_device, mountpoint)
         preboot = Path(mountpoint)
         active_uuid = self.cat(preboot / 'active').strip().decode()
