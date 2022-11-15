@@ -40,7 +40,7 @@ Commands:
 - Execute from shell:
     ```shell
     # for first time only
-    python3 -m pylera1n -v <iOS-Version> --dump-blobs --kernelcachd pongokpf --install-pogo --reboot
+    python3 -m pylera1n ramdisk -v <iOS-Version> --dump-blobs --kernelcachd pongokpf --install-pogo --reboot
   
     # if the first command was succcessful, you can now simply run the following for the given device:
     python3 -m pylera1n jailbreak -v <iOS-Version> --fsboot
