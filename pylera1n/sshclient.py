@@ -113,6 +113,11 @@ class SSHClient:
             self.reboot()
             return
 
+        # removing old files that may break signature check if any
+        self.remove('/usr/local/bin/loader.app/Info.plist', force=True)
+        self.remove('/usr/local/bin/loader.app/Base.lproj', force=True)
+        self.remove('/usr/local/bin/loader.app/PkgInfo', force=True)
+
         logger.info(f'copying /usr/local/bin/loader.app/* -> {tips_dir}/*')
         self.exec(f'/bin/cp -rf /usr/local/bin/loader.app/* {tips_dir}')
 
