@@ -567,6 +567,11 @@ class Pylera1n:
 
         self._gaster_reset()
 
+        restore_logo = self._boot_restore_logo
+        device_tree = self._get_boot_component('DeviceTree')
+        trust_cache = self._get_boot_component('StaticTrustCache')
+        kernel_cache = self._get_boot_component('KernelCache')
+
         with IRecv() as irecv:
             assert irecv.mode == Mode.DFU_MODE
             logger.info('sending iBSS')
@@ -590,19 +595,19 @@ class Pylera1n:
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
-            irecv.send_buffer(self._boot_restore_logo.read_bytes())
+            irecv.send_buffer(restore_logo.read_bytes())
             irecv.send_command('setpicture 0x1')
 
             logger.info('sending DeviceTree')
-            irecv.send_buffer(self._get_boot_component('DeviceTree').read_bytes())
+            irecv.send_buffer(device_tree.read_bytes())
             irecv.send_command('devicetree')
 
             logger.info('sending StaticTrustCache')
-            irecv.send_buffer(self._get_boot_component('StaticTrustCache').read_bytes())
+            irecv.send_buffer(trust_cache.read_bytes())
             irecv.send_command('firmware')
 
             logger.info('sending KernelCache')
-            irecv.send_buffer(self._get_boot_component('KernelCache').read_bytes())
+            irecv.send_buffer(kernel_cache.read_bytes())
             try:
                 logger.info('booting into ramdisk (boot image)')
                 irecv.send_command('bootx', b_request=1)
@@ -657,22 +662,28 @@ class Pylera1n:
 
         self._gaster_pwn()
 
-        ibss = self._get_ramdisk_component('iBSS').read_bytes()
-        ibec = self._get_ramdisk_component('iBEC').read_bytes()
+        ibss = self._get_ramdisk_component('iBSS')
+        ibec = self._get_ramdisk_component('iBEC')
 
         self._gaster_reset()
+
+        restore_logo = self._ramdisk_restore_logo
+        ramdisk = self._get_ramdisk_component('RestoreRamDisk')
+        device_tree = self._get_ramdisk_component('RestoreDeviceTree')
+        trust_cache = self._get_ramdisk_component('RestoreTrustCache')
+        kernel_cache = self._get_ramdisk_component('RestoreKernelCache')
 
         with IRecv() as irecv:
             assert irecv.mode == Mode.DFU_MODE
             logger.info('sending iBSS')
-            irecv.send_buffer(ibss)
+            irecv.send_buffer(ibss.read_bytes())
             time.sleep(1)
 
         try:
             with IRecv() as irecv:
                 assert irecv.mode == Mode.RECOVERY_MODE_2
                 logger.info('sending iBEC')
-                irecv.send_buffer(ibec)
+                irecv.send_buffer(ibec.read_bytes())
 
                 if self._chip_id in (0x8010, 0x8015, 0x8011, 0x8012):
                     irecv.send_command('go', b_request=1)
@@ -684,25 +695,25 @@ class Pylera1n:
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
-            irecv.send_buffer(self._ramdisk_restore_logo.read_bytes())
+            irecv.send_buffer(restore_logo.read_bytes())
             irecv.send_command('setpicture 0x1')
 
             logger.info('sending RestoreRamDisk')
-            irecv.send_buffer(self._get_ramdisk_component('RestoreRamDisk').read_bytes())
+            irecv.send_buffer(ramdisk.read_bytes())
             irecv.send_command('ramdisk')
 
             time.sleep(2)
 
             logger.info('sending RestoreDeviceTree')
-            irecv.send_buffer(self._get_ramdisk_component('RestoreDeviceTree').read_bytes())
+            irecv.send_buffer(device_tree.read_bytes())
             irecv.send_command('devicetree')
 
             logger.info('sending RestoreTrustCache')
-            irecv.send_buffer(self._get_ramdisk_component('RestoreTrustCache').read_bytes())
+            irecv.send_buffer(trust_cache.read_bytes())
             irecv.send_command('firmware')
 
             logger.info('sending RestoreKernelCache')
-            irecv.send_buffer(self._get_ramdisk_component('RestoreKernelCache').read_bytes())
+            irecv.send_buffer(kernel_cache.read_bytes())
             try:
                 logger.info('booting into ramdisk (ramdisk image)')
                 irecv.send_command('bootx', b_request=1)
