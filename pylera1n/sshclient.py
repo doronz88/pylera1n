@@ -1,4 +1,5 @@
 import contextlib
+import dataclasses
 import logging
 import socket
 import tempfile
@@ -11,10 +12,18 @@ from pyimg4 import IMG4, IM4P, Compression
 
 from pylera1n import interactive
 from pylera1n.common import PALERA1N_PATH, path_to_str, OS_VARIANT
+from pylera1n.exceptions import ProcessExecutionFailedError
 
 logger = logging.getLogger(__name__)
 
 APTICKET_DEVICE_PATH = Path('/dev/rdisk1')
+
+
+@dataclasses.dataclass
+class ProcessExecutionResult:
+    exitcode: int
+    stdout: bytes
+    stderr: bytes
 
 
 class SSHClient:
@@ -42,11 +51,16 @@ class SSHClient:
         stdin, stdout, stderr = self._ssh.exec_command(command)
         return stdin, stdout, stderr
 
-    def exec(self, command: str) -> tuple:
+    def exec(self, command: str) -> ProcessExecutionResult:
         stdin, stdout, stderr = self._ssh.exec_command(command)
-        stdout = stdout.read()
-        stderr = stderr.read()
-        return stdout, stderr
+        stdout_buf = stdout.read()
+        stderr_buf = stderr.read()
+        exitcode = stdout.channel.recv_exit_status()
+
+        if exitcode != 0:
+            raise ProcessExecutionFailedError(f'execution on: {command} failed with: {exitcode}')
+
+        return ProcessExecutionResult(exitcode=exitcode, stdout=stdout_buf, stderr=stderr_buf)
 
     @path_to_str('src')
     @path_to_str('dst')
@@ -140,6 +154,7 @@ class SSHClient:
     def place_kernelcachd_using_pongo_kpf(self, preboot_device: Path, local_kernelcache: Path) -> None:
         logger.info('patching kernel using pongo kpf')
 
+        self.mount_apfs('/dev/disk0s1s1', '/mnt1')
         kpf_executable = '/mnt1/private/var/root/Kernel15Patcher.ios'
 
         logger.info('placing pongo kpf')
@@ -206,7 +221,6 @@ class SSHClient:
     @contextlib.contextmanager
     def get_active_preboot(self, preboot_device: Path) -> Path:
         mountpoint = Path(f'/mnt{str(preboot_device)[-1]}')
-        self.umount(mountpoint)
         self.mount_apfs(preboot_device, mountpoint)
         preboot = Path(mountpoint)
         active_uuid = self.cat(preboot / 'active').strip().decode()
@@ -227,8 +241,7 @@ class SSHClient:
         self.exec(f'/usr/sbin/nvram {key}="{value}"')
 
     def get_nvram_value(self, key: str) -> str:
-        stdout, stderr = self.exec(f'/usr/sbin/nvram {key}')
-        return stdout.strip()
+        return self.exec(f'/usr/sbin/nvram {key}').stdout.strip()
 
     @path_to_str('device')
     @path_to_str('mountpoint')
@@ -241,8 +254,7 @@ class SSHClient:
 
     @path_to_str('path')
     def cat(self, path: str) -> bytes:
-        stdout, stderr = self.exec(f'cat {path}')
-        return stdout
+        return self.exec(f'cat {path}').stdout
 
     def close(self) -> None:
         self._sftp.close()

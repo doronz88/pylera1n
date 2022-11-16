@@ -4,3 +4,11 @@ class Pylera1nException(Exception):
 
 class MissingProductVersionError(Pylera1nException):
     pass
+
+
+class SshError(Pylera1nException):
+    pass
+
+
+class ProcessExecutionFailedError(SshError):
+    pass
