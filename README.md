@@ -8,7 +8,7 @@ accessible and maintainable.
 
 ## Installation
 
-Prequisites:
+Perquisites:
 
 - Install python3
 - Install [blacktop/ipsw](https://github.com/blacktop/ipsw)
