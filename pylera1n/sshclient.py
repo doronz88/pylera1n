@@ -1,10 +1,12 @@
 import contextlib
 import dataclasses
 import logging
+import os
 import socket
+from stat import S_ISDIR
 import tempfile
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
 import paramiko
 from plumbum import local
@@ -12,7 +14,7 @@ from pyimg4 import IMG4, IM4P, Compression
 
 from pylera1n import interactive
 from pylera1n.common import PALERA1N_PATH, path_to_str, OS_VARIANT
-from pylera1n.exceptions import ProcessExecutionFailedError
+from pylera1n.exceptions import DirectoryNotEmptyError, MissingActivePrebootError, MountError, ProcessExecutionFailedError
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,29 @@ class SSHClient:
                 raise
 
     @path_to_str('path')
+    def isdir(self, path: str) -> bool:
+        return S_ISDIR(self._sftp.stat(path).st_mode)
+
+    @path_to_str('path')
+    def rmdir(self, path: str, recursive=False, force=False) -> None:
+        try:
+            files = self.listdir(path)
+        except FileNotFoundError:
+            if not force:
+                raise
+        if files:
+            if recursive:
+                for f in files:
+                    file_path = os.path.join(path, f)
+                    if self.isdir(file_path):
+                        self.rmdir(file_path, recursive, force)
+                    else:
+                        self.remove(file_path, force)
+            else:
+                raise DirectoryNotEmptyError(f'Tried to delete non-empty directory {path} without passing recursive flag')
+        self._sftp.rmdir(path)
+
+    @path_to_str('path')
     def listdir(self, path: str) -> List[str]:
         path = str(path)
         return self._sftp.listdir(path)
@@ -119,8 +144,7 @@ class SSHClient:
         while len(self.listdir('/mnt2')) == 0:
             pass
 
-        stdout, stderr = self.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app')
-        tips_dir = stdout.strip().decode()
+        tips_dir = self.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app').stdout.strip().decode()
         if not tips_dir:
             logger.warning(
                 'Tips is not installed. Once your device reboots, install Tips from the App Store and retry')
@@ -128,9 +152,9 @@ class SSHClient:
             return
 
         # removing old files that may break signature check if any
-        self.remove('/usr/local/bin/loader.app/Info.plist', force=True)
-        self.remove('/usr/local/bin/loader.app/Base.lproj', force=True)
-        self.remove('/usr/local/bin/loader.app/PkgInfo', force=True)
+        self.remove(f'{tips_dir}/Info.plist', force=True)
+        self.rmdir(f'{tips_dir}/Base.lproj', recursive=True, force=True)
+        self.remove(f'{tips_dir}/PkgInfo', force=True)
 
         logger.info(f'copying /usr/local/bin/loader.app/* -> {tips_dir}/*')
         self.exec(f'/bin/cp -rf /usr/local/bin/loader.app/* {tips_dir}')
@@ -220,10 +244,14 @@ class SSHClient:
 
     @contextlib.contextmanager
     def get_active_preboot(self, preboot_device: Path) -> Path:
-        mountpoint = Path(f'/mnt{str(preboot_device)[-1]}')
-        self.mount_apfs(preboot_device, mountpoint)
+        mountpoint = self.mount_apfs(preboot_device)
+        logger.info(f'Using mountpoint {mountpoint} for preboot')
+
         preboot = Path(mountpoint)
         active_uuid = self.cat(preboot / 'active').strip().decode()
+        logger.info(f'Preboot {active_uuid=}')
+        if not active_uuid:
+            raise MissingActivePrebootError()
         try:
             yield preboot / active_uuid
         finally:
@@ -243,10 +271,32 @@ class SSHClient:
     def get_nvram_value(self, key: str) -> str:
         return self.exec(f'/usr/sbin/nvram {key}').stdout.strip()
 
+    def get_current_mounts(self) -> Dict[str, str]:
+        current_mounts = {}
+        mounts = self.exec('/sbin/mount').stdout.decode().splitlines()
+        for mount in mounts:
+            mount = mount.split(' ')
+            if mount[1] != 'on':
+                raise MountError(f'Unexpected format of mount point: {mount}')
+            current_mounts[mount[0]] = mount[2]
+        return current_mounts
+
     @path_to_str('device')
-    @path_to_str('mountpoint')
-    def mount_apfs(self, device: str, mountpoint: str) -> None:
-        self.exec(f'/sbin/mount_apfs {device} {mountpoint}')
+    def mount_apfs(self, device: str, mountpoint: str = None) -> str:
+        current_mounts = self.get_current_mounts()
+        if device in current_mounts:
+            device_mountpoint = current_mounts[device]
+            if mountpoint and device_mountpoint != mountpoint:
+                raise MountError(f'{device} can\'t be mounted at {mountpoint}'
+                                 f'since it is already mounted at {current_mounts[device]}')
+            else:
+                return device_mountpoint
+        if not mountpoint:
+            taken_mountpoints = current_mounts.values()
+            available_mountpoints = ['/'+path for path in self.listdir('/') if path.startswith('mnt')]
+            available_mountpoints = [path for path in available_mountpoints if path not in taken_mountpoints]
+            mountpoint = available_mountpoints[0]
+        return mountpoint
 
     @path_to_str('path')
     def umount(self, path: str) -> None:

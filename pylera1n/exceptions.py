@@ -12,3 +12,15 @@ class SshError(Pylera1nException):
 
 class ProcessExecutionFailedError(SshError):
     pass
+
+
+class MissingActivePrebootError(SshError):
+    pass
+
+
+class MountError(SshError):
+    pass
+
+
+class DirectoryNotEmptyError(SshError):
+    pass
