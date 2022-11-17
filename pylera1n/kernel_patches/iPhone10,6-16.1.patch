@@ -24,9 +24,7 @@ FFFFFFF0078641B0: mov x0, #0; ret
 
 # "root volume seal is broken %p"
 FFFFFFF006197250: nop
-
-# handle_mount_by_role
-FFFFFFF00620D340: b 0x268
+#FFFFFFF006197254: mov x0, #0
 
 # apfs_vfsop_mount
 # get_update_rootfs_rw_patch
@@ -34,5 +32,27 @@ FFFFFFF00620D340: b 0x268
 
 # "Updating mount to read/write mode is not allowed"
 #FFFFFFF0062073A4: nop
+
+# root_livefs_patch
+FFFFFFF00619CF7C: nop
+FFFFFFF0061D3FD0: nop
+FFFFFFF006209968: nop
+FFFFFFF0062249B8: nop
+FFFFFFF006225408: nop
+
+# vnop_rootvp_auth
+FFFFFFF0075CE1FC: mov x0, #0
+
+# handle_mount_by_role
+#FFFFFFF00620D340: b 0x268
+
+# handle_eval_roothash
+#FFFFFFF0062234CC: mov x0, #0; ret
+
+# apfs_check_seal
+#FFFFFFF0061F5238: mov x0, #0; ret
+
+# authapfs_seal_break
+#FFFFFFF006196E00: mov x0, #0; ret
 
 
