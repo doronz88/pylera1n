@@ -691,7 +691,8 @@ class Pylera1n:
             # device will reboot and cause a broken pipe
             pass
 
-        time.sleep(1)
+        logger.info('Waiting for iBEC to load')
+        wait(3)
 
         with IRecv() as irecv:
             logger.info('sending RestoreLogo')
