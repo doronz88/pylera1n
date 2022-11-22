@@ -132,6 +132,7 @@ class Pylera1n:
         self._hardware_model: Optional[str] = None
         self._product_type = None
         self._product_version = product_version
+        self._ecid: Optional[str] = None
         self._gaster = local[str(gaster_path)]
         self._hdiutil = None if os.uname().sysname != 'Darwin' else local['hdiutil']
         self._ramdisk_ipsw_path = ramdisk_ipsw
@@ -150,7 +151,7 @@ class Pylera1n:
 
         shsh_blob_dir = self._storage / 'shsh'
         shsh_blob_dir.mkdir(exist_ok=True, parents=True)
-        self._storage_shsh_blob = shsh_blob_dir / f'{self._hardware_model}-{self._product_version}.der'
+        self._storage_shsh_blob = shsh_blob_dir / f'{self._ecid}-{self._hardware_model}-{self._product_version}.der'
 
         self._storage_ramdisk_dir = self._storage / 'ramdisk' / self._hardware_model
 
@@ -833,6 +834,7 @@ class Pylera1n:
                 self._chip_id = lockdown.chip_id
                 self._hardware_model = lockdown.hardware_model
                 self._product_type = lockdown.product_type
+                self._ecid = lockdown.ecid
 
                 logger.info('entering recovery')
                 lockdown.enter_recovery()
@@ -842,6 +844,7 @@ class Pylera1n:
                 self._chip_id = irecv.chip_id
                 self._hardware_model = irecv.hardware_model
                 self._product_type = irecv.product_type
+                self._ecid = irecv.ecid
         logger.info(f'init with device: {self}')
 
     def _init_ramdisk_ipsw(self) -> None:
