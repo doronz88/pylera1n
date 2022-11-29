@@ -378,7 +378,10 @@ class Pylera1n:
             local_app = temp_dir / 'Pogo'
             self._tips.extractall(local_app)
             loader_app = mountpoint / 'usr' / 'local' / 'bin' / 'loader.app'
-            shutil.rmtree(mountpoint / loader_app)
+            try:
+                shutil.rmtree(mountpoint / loader_app)
+            except FileNotFoundError:
+                pass
             shutil.copytree(local_app / 'Payload' / 'Pogo.app', loader_app)
 
             logger.info('renaming /usr/local/bin/loader.app/Pogo -> /usr/local/bin/loader.app/Tips')
