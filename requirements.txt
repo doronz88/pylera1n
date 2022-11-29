@@ -11,3 +11,4 @@ remotezip
 tqdm
 keystone-engine
 IPython
+ipsw_parser
