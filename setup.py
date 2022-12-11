@@ -26,7 +26,7 @@ if __name__ == '__main__':
     setup(
         version=VERSION,
         name=PACKAGE_NAME,
-        description='Python adaptation for pelara1n',
+        description='Python adaptation for palera1n',
         long_description=get_description(),
         long_description_content_type='text/markdown',
         cmdclass={},
