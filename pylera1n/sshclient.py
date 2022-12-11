@@ -1,20 +1,20 @@
-import contextlib
 import dataclasses
 import logging
 import os
 import socket
-from stat import S_ISDIR
 import tempfile
 from pathlib import Path
+from stat import S_ISDIR
 from typing import List, Dict
 
 import paramiko
 from plumbum import local
-from pyimg4 import IMG4, IM4P, Compression
+from pyimg4 import IM4P, Compression
 
 from pylera1n import interactive
 from pylera1n.common import PALERA1N_PATH, path_to_str, OS_VARIANT
-from pylera1n.exceptions import DirectoryNotEmptyError, MissingActivePrebootError, MountError, ProcessExecutionFailedError
+from pylera1n.exceptions import DirectoryNotEmptyError, MissingActivePrebootError, MountError, \
+    ProcessExecutionFailedError
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +103,8 @@ class SSHClient:
                     else:
                         self.remove(file_path, force)
             else:
-                raise DirectoryNotEmptyError(f'Tried to delete non-empty directory {path} without passing recursive flag')
+                raise DirectoryNotEmptyError(
+                    f'Tried to delete non-empty directory {path} without passing recursive flag')
         self._sftp.rmdir(path)
 
     @path_to_str('path')
@@ -120,6 +121,7 @@ class SSHClient:
         self._sftp.chown(path, owner, owner)
 
     def mount_filesystems(self) -> None:
+        logger.info('mounting filesystems')
         self.exec('/usr/bin/mount_filesystems')
 
     def enable_development_options(self) -> None:
@@ -138,13 +140,11 @@ class SSHClient:
     def install_pogo(self) -> None:
         logger.info('installing Pogo')
 
-        logger.info('mounting filesystems')
-        self.mount_filesystems()
-
         while len(self.listdir('/mnt2')) == 0:
             pass
 
-        tips_dir = self.exec('/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app').stdout.strip().decode()
+        tips_dir = self.exec(
+            '/usr/bin/find /mnt2/containers/Bundle/Application/ -name Tips.app').stdout.strip().decode()
         if not tips_dir:
             logger.warning(
                 'Tips is not installed. Once your device reboots, install Tips from the App Store and retry')
@@ -175,7 +175,7 @@ class SSHClient:
         self.exec('cp -a /mnt1/. /mnt8/')
         self.umount('/mnt8')
 
-    def place_kernelcachd_using_pongo_kpf(self, preboot_device: Path, local_kernelcache: Path) -> None:
+    def place_kernelcachd_using_pongo_kpf(self, local_kernelcache: Path) -> None:
         logger.info('patching kernel using pongo kpf')
 
         self.mount_apfs('/dev/disk0s1s1', '/mnt1')
@@ -196,70 +196,61 @@ class SSHClient:
             local_kcache_raw = temp_dir / 'kcache.raw'
             local_kcache_raw.write_bytes(im4p.payload.output().data)
 
-            with self.get_active_preboot(preboot_device) as preboot:
-                remote_kcache_raw = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.raw'
-                remote_kcache_patched = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.patched'
-                remote_kernelcachd = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kernelcachd'
-                remote_im4p = f'{preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.im4p'
+            remote_kcache_raw = f'{self.active_preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.raw'
+            remote_kcache_patched = f'{self.active_preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.patched'
+            remote_kernelcachd = f'{self.active_preboot}/System/Library/Caches/com.apple.kernelcaches/kernelcachd'
+            remote_im4p = f'{self.active_preboot}/System/Library/Caches/com.apple.kernelcaches/kcache.im4p'
 
-                # remove temp files if any
-                self.remove(remote_kcache_raw, force=True)
-                self.remove(remote_kcache_patched, force=True)
-                self.remove(remote_kernelcachd, force=True)
-                self.remove(remote_im4p, force=True)
+            # remove temp files if any
+            self.remove(remote_kcache_raw, force=True)
+            self.remove(remote_kcache_patched, force=True)
+            self.remove(remote_kernelcachd, force=True)
+            self.remove(remote_im4p, force=True)
 
-                # placing raw kernel
-                self.put_file(local_kcache_raw, remote_kcache_raw)
+            # placing raw kernel
+            self.put_file(local_kcache_raw, remote_kcache_raw)
 
-                # patch using pongo kpf
-                self.exec(f'{kpf_executable} {remote_kcache_raw} {remote_kcache_patched}')
+            # patch using pongo kpf
+            self.exec(f'{kpf_executable} {remote_kcache_raw} {remote_kcache_patched}')
 
-                # applying our own patches
-                temp_dir = Path(temp_dir)
-                local_kcache_patched1 = temp_dir / 'kcache.patched'
-                local_kcache_patched2 = temp_dir / 'kcache.patched2'
-                self.get_file(remote_kcache_patched, local_kcache_patched1)
+            # applying our own patches
+            temp_dir = Path(temp_dir)
+            local_kcache_patched1 = temp_dir / 'kcache.patched'
+            local_kcache_patched2 = temp_dir / 'kcache.patched2'
+            self.get_file(remote_kcache_patched, local_kcache_patched1)
 
-                local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')](local_kcache_patched1,
-                                                                                        local_kcache_patched2, '-o',
-                                                                                        '-e', '-u')
-                im4p = IM4P(fourcc='krnl', payload=local_kcache_patched2.read_bytes())
-                im4p.payload.compress(Compression.LZSS)
-                im4p.payload.extra = kpp
+            local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')](local_kcache_patched1,
+                                                                                    local_kcache_patched2, '-o',
+                                                                                    '-e', '-u')
+            im4p = IM4P(fourcc='krnl', payload=local_kcache_patched2.read_bytes())
+            im4p.payload.compress(Compression.LZSS)
+            im4p.payload.extra = kpp
 
-                local_im4p = temp_dir / 'kcache.im4p'
-                local_im4p.write_bytes(im4p.output())
+            local_im4p = temp_dir / 'kcache.im4p'
+            local_im4p.write_bytes(im4p.output())
 
-                self.put_file(local_im4p, remote_im4p)
-                self.exec(f'img4 '
-                          f'-i {remote_im4p} '
-                          f'-o {remote_kernelcachd} '
-                          f'-M {preboot}/System/Library/Caches/apticket.der')
-                self.chmod(remote_kernelcachd, 0o644)
+            self.put_file(local_im4p, remote_im4p)
+            self.exec(f'img4 '
+                      f'-i {remote_im4p} '
+                      f'-o {remote_kernelcachd} '
+                      f'-M {self.active_preboot}/System/Library/Caches/apticket.der')
+            self.chmod(remote_kernelcachd, 0o644)
 
-                # remove temp files if any
-                self.remove(remote_kcache_raw, force=True)
-                self.remove(remote_kcache_patched, force=True)
-                self.remove(remote_im4p, force=True)
+            # remove temp files if any
+            self.remove(remote_kcache_raw, force=True)
+            self.remove(remote_kcache_patched, force=True)
+            self.remove(remote_im4p, force=True)
 
-    @contextlib.contextmanager
-    def get_active_preboot(self, preboot_device: Path) -> Path:
-        mountpoint = self.mount_apfs(preboot_device)
-        logger.info(f'Using mountpoint {mountpoint} for preboot')
-
-        preboot = Path(mountpoint)
-        active_uuid = self.cat(preboot / 'active').strip().decode()
-        logger.info(f'Preboot {active_uuid=}')
+    @property
+    def active_preboot(self) -> Path:
+        active_uuid = self.cat('/mnt6/active').strip().decode()
         if not active_uuid:
             raise MissingActivePrebootError()
-        try:
-            yield preboot / active_uuid
-        finally:
-            self.umount(mountpoint)
+        return Path(f'/mnt6/{active_uuid}')
 
     @property
     def apticket(self) -> bytes:
-        return IMG4(self.cat(APTICKET_DEVICE_PATH)).im4m.output()
+        return self.cat(self.active_preboot / 'System/Library/Caches/apticket.der')
 
     def reboot(self) -> None:
         logger.info('rebooting')
@@ -293,7 +284,7 @@ class SSHClient:
                 return device_mountpoint
         if not mountpoint:
             taken_mountpoints = current_mounts.values()
-            available_mountpoints = ['/'+path for path in self.listdir('/') if path.startswith('mnt')]
+            available_mountpoints = ['/' + path for path in self.listdir('/') if path.startswith('mnt')]
             available_mountpoints = [path for path in available_mountpoints if path not in taken_mountpoints]
             mountpoint = available_mountpoints[0]
         return mountpoint

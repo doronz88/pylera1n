@@ -30,7 +30,7 @@ from remotezip import RemoteZip
 from tqdm import trange
 from usb import USBError
 
-from pylera1n.common import DEFAULT_STORAGE, PALERA1N_PATH, BOOTLOGO_PATH, DEVICE_PREBOOT, wait, OS_VARIANT, \
+from pylera1n.common import DEFAULT_STORAGE, PALERA1N_PATH, BOOTLOGO_PATH, wait, OS_VARIANT, \
     blacktop_ipsw
 from pylera1n.exceptions import MissingProductVersionError
 from pylera1n.sshclient import SSHClient
@@ -46,7 +46,7 @@ class KernelcachdStrategy(Enum):
 def download_gaster(output: Path, os_version: str = os.uname().sysname):
     logger.info('downloading gaster')
     gaster_zip = requests.get(
-        f'https://nightly.link/verygenericname/gaster/workflows/makefile/main/gaster-{os_version}.zip').content
+        f'https://nightly.link/palera1n/gaster/workflows/makefile/main/gaster-{os_version}.zip').content
     gaster_zip = ZipFile(BytesIO(gaster_zip))
     with gaster_zip.open('gaster') as f:
         output.write_bytes(f.read())
@@ -219,15 +219,13 @@ class Pylera1n:
                 return False
         return True
 
-    @property
-    def _preboot_device(self) -> str:
-        return DEVICE_PREBOOT[self._product_type]
-
     def perform_ramdisk_ssh_operations(self, dump_blobs=False, install_pogo=False,
                                        enable_development_options=False, kernelcachd: KernelcachdStrategy = None,
                                        auto_boot=False, reboot=False, fakefs=False) -> None:
         """ create blobs, install pogo and patch nvram if on non-rootless """
         with wait_device_ssh() as ssh:
+            ssh.mount_filesystems()
+
             if dump_blobs:
                 logger.info(f'saving apticket to: {self._storage_shsh_blob}')
                 self._storage_shsh_blob.write_bytes(ssh.apticket)
@@ -243,12 +241,11 @@ class Pylera1n:
 
             if kernelcachd == KernelcachdStrategy.Normal:
                 logger.info('placing kernelcachd')
-                with ssh.get_active_preboot(self._preboot_device) as preboot:
-                    remote_kernelcachd = preboot / 'System' / 'Library' / 'Caches' / 'com.apple.kernelcaches' / 'kernelcachd'
-                    ssh.put_file(
-                        self._get_boot_component('KernelCache', basename='krnl', is_restore=False, cache=False),
-                        remote_kernelcachd)
-                    ssh.chmod(remote_kernelcachd, 0o644)
+                remote_kernelcachd = ssh.active_preboot / 'System' / 'Library' / 'Caches' / 'com.apple.kernelcaches' / 'kernelcachd'
+                ssh.put_file(
+                    self._get_boot_component('KernelCache', basename='krnl', is_restore=False, cache=False),
+                    remote_kernelcachd)
+                ssh.chmod(remote_kernelcachd, 0o644)
 
             if kernelcachd == KernelcachdStrategy.PongoKpf:
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -258,7 +255,7 @@ class Pylera1n:
                     build_identity = self.boot_ipsw.build_manifest.get_build_identity(self._hardware_model)
                     component_path = build_identity.get_component_path('KernelCache')
                     local_kernelcache.write_bytes(self.boot_ipsw.read(component_path))
-                    ssh.place_kernelcachd_using_pongo_kpf(self._preboot_device, local_kernelcache)
+                    ssh.place_kernelcachd_using_pongo_kpf(local_kernelcache)
 
             ssh.auto_boot = auto_boot
 
@@ -749,15 +746,16 @@ class Pylera1n:
 
     @staticmethod
     def patch_iboot_component(iboot: Path, output: Path, boot_args: str = None, fsboot=False) -> None:
-        if fsboot:
-            executable = str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcherfsboot')
-        else:
-            executable = str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcher')
+        executable = str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'iBoot64Patcher')
+        args = [iboot, output]
 
-        if boot_args is None:
-            local[executable](iboot, output)
-        else:
-            local[executable](iboot, output, '-b', boot_args)
+        if boot_args is not None:
+            args += ['-b', boot_args]
+
+        if fsboot:
+            args += ['-f']
+
+        local[executable](args)
 
     @staticmethod
     def patch_kernelcache(kernelcache: Path, output: Path, flag_o=False) -> None:
@@ -842,6 +840,7 @@ class Pylera1n:
 
                 logger.info('entering recovery')
                 lockdown.enter_recovery()
+                wait(3)
         except (NoDeviceConnectedError, ConnectionFailedError):
             with IRecv(timeout=1) as irecv:
                 self._board_id = irecv.board_id

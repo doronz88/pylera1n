@@ -11,13 +11,6 @@ DEFAULT_STORAGE = Path('~/.pylera1n').expanduser()
 PALERA1N_PATH = Path(__file__).parent / 'palera1n'
 BOOTLOGO_PATH = Path(__file__).parent / 'bootlogo.im4p'
 
-DEVICE_PREBOOT = {
-    'iPhone9,4': '/dev/disk0s1s6',
-    'iPhone10,3': '/dev/disk0s1s7',
-    'iPhone10,5': '/dev/disk0s1s6',
-    'iPhone10,6': '/dev/disk0s1s6',
-}
-
 OS_VARIANT = os.uname().sysname
 
 blacktop_ipsw = local['ipsw']

@@ -42,7 +42,7 @@ Commands:
     # for first time only
     python3 -m pylera1n ramdisk -v <iOS-Version> --dump-blobs --kernelcachd pongokpf --install-pogo --reboot
   
-    # if the first command was succcessful, you can now simply run the following for the given device:
+    # if the first command was successful, you can now simply run the following for the given device:
     python3 -m pylera1n jailbreak -v <iOS-Version> --fsboot
     ```
 - Open `Tips` application.
