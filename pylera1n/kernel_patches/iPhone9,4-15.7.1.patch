@@ -31,3 +31,6 @@ FFFFFFF0075ADA20: mov w0, #0x1; ret
 
 # patch _csfg_get_platform_binary
 FFFFFFF0075ADB54: mov w0, #0x1; ret
+
+# patch kern.osbuildconfig
+FFFFFFF00703BDD2: .asciz "debug"
