@@ -8,6 +8,7 @@ from stat import S_ISDIR
 from typing import List, Dict
 
 import paramiko
+from paramiko.sftp_attr import SFTPAttributes
 from plumbum import local
 from pyimg4 import IM4P, Compression
 
@@ -17,8 +18,6 @@ from pylera1n.exceptions import DirectoryNotEmptyError, MissingActivePrebootErro
     ProcessExecutionFailedError
 
 logger = logging.getLogger(__name__)
-
-APTICKET_DEVICE_PATH = Path('/dev/rdisk1')
 
 
 @dataclasses.dataclass
@@ -45,6 +44,18 @@ class SSHClient:
     @auto_boot.setter
     def auto_boot(self, value: bool):
         self.set_nvram_value('auto-boot', str(value).lower())
+
+    @property
+    def has_baseband(self) -> bool:
+        return self.exec('/usr/bin/mgask HasBaseband').stdout.decode().strip() == 'true'
+
+    def get_fakefs_disk(self, is_ios16=False, chip_id: int = 0) -> str:
+        n = 7
+
+        if not self.has_baseband and (0x7000 <= chip_id <= 0x700f):
+            n = 6
+
+        return f'/dev/disk1s{n}' if is_ios16 else f'/dev/disk0s1s{n}'
 
     def interact(self) -> None:
         interactive.interactive_shell(self._ssh.invoke_shell())
@@ -109,8 +120,19 @@ class SSHClient:
 
     @path_to_str('path')
     def listdir(self, path: str) -> List[str]:
-        path = str(path)
         return self._sftp.listdir(path)
+
+    @path_to_str('path')
+    def stat(self, path: str) -> SFTPAttributes:
+        return self._sftp.stat(path)
+
+    @path_to_str('path')
+    def accessible(self, path: str) -> bool:
+        try:
+            self.stat(path)
+            return True
+        except FileNotFoundError:
+            return False
 
     @path_to_str('path')
     def chmod(self, path: str, mode: int) -> None:
@@ -120,9 +142,18 @@ class SSHClient:
     def chown(self, path: str, owner: int) -> None:
         self._sftp.chown(path, owner, owner)
 
-    def mount_filesystems(self) -> None:
+    def mount_filesystems(self, nouser=False) -> None:
         logger.info('mounting filesystems')
-        self.exec('/usr/bin/mount_filesystems')
+        if nouser:
+            self.exec('/usr/bin/mount_filesystems_nouser')
+        else:
+            self.exec('/usr/bin/mount_filesystems')
+
+    def remove_jailbreak(self, is_ios16: bool, chip_id: int = 0) -> None:
+        logger.info('removing jailbreak')
+        self.delete_apfs(self.get_fakefs_disk(is_ios16, chip_id=chip_id))
+        self.remove(f'{self.active_preboot}/System/Library/Caches/com.apple.kernelcaches/kernelcachd')
+        self.exec('/bin/sync')
 
     def enable_development_options(self) -> None:
         logger.info('enabling development options')
@@ -135,7 +166,7 @@ class SSHClient:
                              'pmap_cs_unrestrict_pmap_cs_disable=1 -unsafe_kernel_text dtrace_dof_mode=1 '
                              'panic-wait-forever=1 -panic_notify cs_debug=1 PE_i_can_has_debugger=1')
         self.set_nvram_value('allow-root-hash-mismatch', '1')
-        self.set_nvram_value('oot-live-fs', '1')
+        self.set_nvram_value('root-live-fs', '1')
 
     def install_pogo(self) -> None:
         logger.info('installing Pogo')
@@ -164,25 +195,30 @@ class SSHClient:
         self.exec(f'/bin/chmod 755 {tips_dir}/Tips {tips_dir}/PogoHelper')
         self.exec(f'/usr/sbin/chown 0 {tips_dir}/PogoHelper')
 
-    def create_fakefs(self) -> None:
-        logger.info('creating fakefs')
-        try:
-            self._sftp.stat('/dev/disk0s1s8')
-        except FileNotFoundError:
-            self.exec('/sbin/newfs_apfs -A -D -o role=r -v System /dev/disk0s1')
-
-        self.mount_apfs('/dev/disk0s1s8', '/mnt8')
+    def create_fakefs(self, is_ios16: bool, chip_id: int = 0) -> None:
+        logger.info('creating fakefs, this may take a while (up to 10 minutes)')
+        self.exec('/sbin/newfs_apfs -A -D -o role=r -v System /dev/disk0s1')
+        self.mount_apfs(self.get_fakefs_disk(is_ios16, chip_id=chip_id), '/mnt8')
         self.exec('cp -a /mnt1/. /mnt8/')
-        self.umount('/mnt8')
 
-    def place_kernelcachd_using_pongo_kpf(self, local_kernelcache: Path) -> None:
+        if is_ios16:
+            self.remove('/mnt8/System/Library/Caches/com.apple.dyld')
+            self.exec('ln -s /System/Cryptexes/OS/System/Library/Caches/com.apple.dyld /mnt8/System/Library/Caches/')
+            self.exec('rm -rf /mnt8/jbin/binpack /mnt8/jbin/loader.app')
+            self.exec('mkdir -p /mnt8/jbin/binpack /mnt8/jbin/loader.app')
+
+            # TODO: place binpack and loader.app
+            pass
+
+    def place_kernelcachd_using_pongo_kpf(self, local_kernelcache: Path, is_ios16=False) -> None:
         logger.info('patching kernel using pongo kpf')
 
-        self.mount_apfs('/dev/disk0s1s1', '/mnt1')
-        kpf_executable = '/mnt1/private/var/root/Kernel15Patcher.ios'
-
         logger.info('placing pongo kpf')
-        self.put_file(PALERA1N_PATH / 'binaries' / 'Kernel15Patcher.ios', kpf_executable)
+        kpf_executable = f'{self.active_preboot}/kpf'
+        if is_ios16:
+            self.put_file(PALERA1N_PATH / 'binaries' / 'Kernel16Patcher.ios', kpf_executable)
+        else:
+            self.put_file(PALERA1N_PATH / 'binaries' / 'Kernel15Patcher.ios', kpf_executable)
         self.chown(kpf_executable, 0)
         self.chmod(kpf_executable, 0o777)
 
@@ -219,9 +255,14 @@ class SSHClient:
             local_kcache_patched2 = temp_dir / 'kcache.patched2'
             self.get_file(remote_kcache_patched, local_kcache_patched1)
 
-            local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')](local_kcache_patched1,
-                                                                                    local_kcache_patched2, '-o',
-                                                                                    '-e', '-u')
+            args = [local_kcache_patched1, local_kcache_patched2]
+
+            if is_ios16:
+                args += ['-e', '-a', '-o', '-u', '-l', '-t', '-h']
+            else:
+                args += ['-e', '-a', '-l']
+
+            local[str(PALERA1N_PATH / 'binaries' / OS_VARIANT / 'Kernel64Patcher')](args)
             im4p = IM4P(fourcc='krnl', payload=local_kcache_patched2.read_bytes())
             im4p.payload.compress(Compression.LZSS)
             im4p.payload.extra = kpp
@@ -253,7 +294,7 @@ class SSHClient:
         return self.cat(self.active_preboot / 'System/Library/Caches/apticket.der')
 
     def reboot(self) -> None:
-        logger.info('rebooting')
+        logger.info('rebooting. if device doesn\'t restart within the next few seconds - perform hard-reset')
         self.exec_async('/sbin/reboot')
 
     def set_nvram_value(self, key: str, value: str):
@@ -272,6 +313,9 @@ class SSHClient:
             current_mounts[mount[0]] = mount[2]
         return current_mounts
 
+    def delete_apfs(self, device: str) -> None:
+        self.exec(f'/sbin/apfs_deletefs {device}')
+
     @path_to_str('device')
     def mount_apfs(self, device: str, mountpoint: str = None) -> str:
         current_mounts = self.get_current_mounts()
@@ -283,10 +327,23 @@ class SSHClient:
             else:
                 return device_mountpoint
         if not mountpoint:
-            taken_mountpoints = current_mounts.values()
+            # fetch all current mountpoints
+            mounted_mountpoints = current_mounts.values()
+
+            # get all /mnt* entries
             available_mountpoints = ['/' + path for path in self.listdir('/') if path.startswith('mnt')]
-            available_mountpoints = [path for path in available_mountpoints if path not in taken_mountpoints]
+
+            # filter out those already mounted
+            available_mountpoints = [path for path in available_mountpoints if path not in mounted_mountpoints]
+
+            # filter out those already occupied
+            available_mountpoints = [path for path in available_mountpoints if len(self.listdir(path)) == 0]
+
+            # get the first one available
             mountpoint = available_mountpoints[0]
+
+        self.exec(f'/sbin/mount_apfs {device} {mountpoint}')
+
         return mountpoint
 
     @path_to_str('path')
@@ -295,7 +352,7 @@ class SSHClient:
 
     @path_to_str('path')
     def cat(self, path: str) -> bytes:
-        return self.exec(f'cat {path}').stdout
+        return self.exec(f'/bin/cat {path}').stdout
 
     def close(self) -> None:
         self._sftp.close()

@@ -66,15 +66,12 @@ def put_file(source, destination):
 @click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
 @click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
 @click.option('--dump-blobs', is_flag=True, default=False, help='Dump blobs')
-@click.option('--install-pogo', is_flag=True, default=False, help='Install Pogo')
-@click.option('--enable-development-options', is_flag=True, default=False,
-              help='Write nvram development features')
 @click.option('--fakefs', is_flag=True, default=False, help='Install fakefs')
 @click.option('--kernelcachd', type=click.Choice(['pongokpf', 'normal']))
 @click.option('--auto-boot', is_flag=True, default=False, help='NVRAM auto-boot value')
 @click.option('--reboot', is_flag=True, default=False, help='Reboot on connection close')
-def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool, dump_blobs: bool, install_pogo: bool,
-            enable_development_options: bool, fakefs: bool, kernelcachd: str, auto_boot: bool, reboot: bool):
+def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool, dump_blobs: bool,
+            fakefs: bool, kernelcachd: str, auto_boot: bool, reboot: bool):
     """ Boot into ramdisk """
     if kernelcachd == 'pongokpf':
         kernelcachd = KernelcachdStrategy.PongoKpf
@@ -86,8 +83,7 @@ def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool, dump_blobs:
     exploit = Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw)
     exploit.boot_ramdisk(recreate_ramdisk=recreate_ramdisk)
     exploit.perform_ramdisk_ssh_operations(
-        dump_blobs=dump_blobs, install_pogo=install_pogo,
-        enable_development_options=enable_development_options, fakefs=fakefs,
+        dump_blobs=dump_blobs, fakefs=fakefs,
         kernelcachd=kernelcachd, auto_boot=auto_boot, reboot=reboot)
 
 
@@ -96,17 +92,18 @@ def ramdisk(version: str, ramdisk_ipsw: str, recreate_ramdisk: bool, dump_blobs:
 @click.option('--ramdisk-ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='15.7 IPSW')
 @click.option('--ipsw', type=click.Path(dir_okay=False, file_okay=True, exists=True), help='Device correct IPSW')
 @click.option('--devel', is_flag=True, help='Try using development build instead of original')
-@click.option('--recreate-ramdisk', is_flag=True, help='Recreate ramdisk if already exists')
 @click.option('--recreate-boot', is_flag=True, help='Recreate boot if already exists')
-@click.option('--install-pogo', default=False, is_flag=True, help='Install Pogo')
-@click.option('--fakefs', default=False, is_flag=True, help='Use fakefs')
-@click.option('--fsboot', default=False, is_flag=True, help='Use fsboot instead of bootx technique')
-def jailbreak(version: str, ramdisk_ipsw: str, ipsw: str, devel: bool, recreate_ramdisk: bool,
-              recreate_boot: bool, install_pogo: bool, fakefs: bool, fsboot: bool):
+@click.option('--bootx', default=False, is_flag=True, help='Use bootx instead of fsboot technique')
+@click.option('--boot-device', help='boot device')
+def jailbreak(version: str, ramdisk_ipsw: str, ipsw: str, devel: bool, recreate_boot: bool, bootx: bool,
+              boot_device: str):
     """ Perform full jailbreak """
+    if not bootx:
+        if boot_device is None:
+            raise click.BadOptionUsage('--boot-device', 'either --bootx or --boot-device must be specified')
+
     Pylera1n(product_version=version, ramdisk_ipsw=ramdisk_ipsw, ipsw=ipsw, devel=devel).jailbreak(
-        recreate_ramdisk=recreate_ramdisk, recreate_boot=recreate_boot, install_pogo=install_pogo, fakefs=fakefs,
-        fsboot=fsboot)
+        recreate_boot=recreate_boot, bootx=bootx, boot_device=boot_device)
 
 
 if __name__ == '__main__':
